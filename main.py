@@ -27,6 +27,7 @@ CACHE_DIR = Path(".cache/pages")
 CACHE_ENABLED = True
 REFRESH_CACHE = False
 NAME_MAPPING_FILE = Path("name_mapping.txt")
+IGNORE_SKILLS_FILE = Path("ignore_skills.txt")
 TEMPLATE_FILE = Path(__file__).with_name("template.html")
 SITE_STYLES_FILE = Path(__file__).with_name("wiki_site_styles.css")
 ICONS_DIR = Path(__file__).with_name("icons")
@@ -886,11 +887,32 @@ def normalize_type_for_match(type_name: str, canonical_map: dict[str, str]) -> s
     return canonical_map.get(normalized, normalized)
 
 
+def load_ignored_skills(ignore_file: Path = IGNORE_SKILLS_FILE) -> set[str]:
+    """加载需要在汇总表中过滤的技能名"""
+    ignored: set[str] = set()
+
+    if not ignore_file.exists():
+        return ignored
+
+    try:
+        for line in ignore_file.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text or text.startswith("#"):
+                continue
+            ignored.add(re.sub(r"\s+", "", text))
+    except Exception as e:
+        print(f"读取忽略技能文件失败，跳过过滤: {e}")
+        return set()
+
+    return ignored
+
+
 def build_form_move_tables(
     moves: list[dict],
     type_effectiveness_forms: list[dict],
     name_mapping: dict[str, str] | None = None,
     fallback_types: list[str] | None = None,
+    ignored_skills: set[str] | None = None,
 ) -> list[dict]:
     """按形态构建技能池汇总（物理/特殊本系与非本系、变化）"""
     row_labels = ["物理本系", "物理非本系", "特殊本系", "特殊非本系", "变化"]
@@ -912,6 +934,10 @@ def build_form_move_tables(
         for move in moves:
             name = str(move.get("name", "")).strip()
             if not name:
+                continue
+
+            normalized_name = re.sub(r"\s+", "", name)
+            if ignored_skills and normalized_name in ignored_skills:
                 continue
 
             category = str(move.get("category", "")).replace("變化", "变化").strip()
@@ -1101,11 +1127,13 @@ def main():
             }]
 
         moves = dedupe_moves_by_name(extract_moves(soup))
+        ignored_skills = load_ignored_skills()
         form_move_tables = build_form_move_tables(
             moves,
             type_effectiveness_forms,
             name_mapping=name_mapping,
             fallback_types=types,
+            ignored_skills=ignored_skills,
         )
         image_url = extract_image_url(soup, number)
 
