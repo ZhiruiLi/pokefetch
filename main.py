@@ -25,6 +25,8 @@ HEADERS = {
 CACHE_DIR = Path(".cache/pages")
 CACHE_ENABLED = True
 REFRESH_CACHE = False
+NAME_MAPPING_FILE = Path("name_mapping.txt")
+TEMPLATE_FILE = Path(__file__).with_name("template.html")
 
 
 def fetch_page(url: str) -> BeautifulSoup:
@@ -48,6 +50,34 @@ def fetch_page(url: str) -> BeautifulSoup:
         cache_file.write_text(html, encoding="utf-8")
 
     return BeautifulSoup(html, "lxml")
+
+
+def load_name_mapping(mapping_file: Path = NAME_MAPPING_FILE) -> dict[str, str]:
+    """加载名称映射表（如属性全名 -> 简称）"""
+    mapping: dict[str, str] = {}
+
+    if not mapping_file.exists():
+        print(f"未找到映射文件，跳过映射: {mapping_file}")
+        return mapping
+
+    try:
+        for line in mapping_file.read_text(encoding="utf-8").splitlines():
+            text = line.strip()
+            if not text or text.startswith("#"):
+                continue
+
+            parts = text.split()
+            if len(parts) < 2:
+                continue
+
+            src, dst = parts[0], parts[1]
+            if src and dst:
+                mapping[src] = dst
+    except Exception as e:
+        print(f"读取映射文件失败，跳过映射: {e}")
+        return {}
+
+    return mapping
 
 
 def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
@@ -157,52 +187,116 @@ def extract_base_stats(soup: BeautifulSoup) -> dict:
     return stats
 
 
-def extract_types(soup: BeautifulSoup) -> list:
+def extract_types(soup: BeautifulSoup, name_mapping: dict[str, str] | None = None) -> list:
     """提取属性"""
-    types = []
+    raw_types: list[str] = []
+    known_types = list((name_mapping or {}).keys()) or [
+        "一般", "格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
+        "火", "水", "草", "电", "超能力", "冰", "龙", "恶", "妖精"
+    ]
 
-    # 方法1: 从信息框中提取 - 查找包含"属性"文本的 roundy 表格
-    tables = soup.find_all("table", class_="roundy")
-    for table in tables:
-        text = table.get_text(strip=True)
-        # 检查是否是信息框（包含属性、分类等）
-        if "属性" in text and "分类" in text:
-            rows = table.find_all("tr")
-            for row in rows:
-                th = row.find("th")
-                if th and "属性" in th.get_text():
-                    # 在同一行或下一行查找属性值
-                    tds = row.find_all("td")
-                    for td in tds:
-                        # 获取所有文本
-                        type_text = td.get_text(strip=True)
-                        # 清理属性名称
-                        type_text = type_text.replace("屬性", "").replace("屬", "").replace("属性", "")
-                        # 如果清理后还有内容，添加到列表
-                        if type_text and type_text not in ["", "宝可梦"]:
-                            types.append(type_text)
-                    break
+    def extract_known_types(text: str, allow_fuzzy: bool = False) -> list[str]:
+        """从任意文本中提取已知属性名"""
+        cleaned = text.replace("屬性", "").replace("屬", "").replace("属性", "")
+        tokens = re.split(r"[／/、,，\s]+", cleaned)
+
+        result: list[str] = []
+
+        # 优先精确 token 匹配
+        for token in tokens:
+            t = token.strip()
+            if t in known_types:
+                result.append(t)
+
+        # 可选：模糊匹配，仅用于兜底文本
+        if allow_fuzzy and not result:
+            for t in known_types:
+                if t in cleaned:
+                    result.append(t)
+
+        return list(dict.fromkeys(result))
+
+    # 方法1: 从“属性相性”表格的防守行前两列提取（最稳定）
+    headers = soup.find_all(["h2", "h3"])
+    target_header = None
+    for h in headers:
+        h_text = h.get_text()
+        if "属性相性" in h_text or "屬性相性" in h_text:
+            target_header = h
             break
 
-    # 方法2: 从页面文本中提取
-    if not types:
-        # 查找 "是xx属性/xx属性宝可梦" 的模式
-        text = soup.get_text()
+    if target_header:
+        tables = target_header.find_all_next("table", class_="roundy", limit=5)
+        for table in tables:
+            rows = table.find_all("tr")
+            if len(rows) < 2:
+                continue
+
+            header_cells = rows[0].find_all(["th", "td"])
+            data_cells = rows[1].find_all(["th", "td"])
+            if len(header_cells) < 19 or len(data_cells) < 2:
+                continue
+
+            header_title = header_cells[0].get_text(strip=True)
+            if header_title not in ["进攻招式属性", "進攻招式屬性"]:
+                continue
+
+            for cell in data_cells[:2]:
+                raw_types.extend(extract_known_types(cell.get_text(" ", strip=True), allow_fuzzy=False))
+
+            if raw_types:
+                break
+
+    # 方法2: 从信息框中提取（兜底）
+    if not raw_types:
+        infobox = soup.find("table", class_=re.compile("roundy"))
+        if infobox:
+            rows = infobox.find_all("tr")
+            for row in rows:
+                th = row.find("th")
+                th_text = th.get_text(strip=True) if th else ""
+                if th_text in ["属性", "屬性"]:
+                    tds = row.find_all("td")
+                    for td in tds:
+                        link_titles = [a.get("title", "") for a in td.find_all("a")]
+                        for title in link_titles:
+                            raw_types.extend(extract_known_types(title, allow_fuzzy=False))
+
+                        raw_types.extend(extract_known_types(td.get_text(" ", strip=True), allow_fuzzy=False))
+                    break
+
+    # 方法3: 从页面文本中兜底提取
+    if not raw_types:
+        text = soup.get_text(" ", strip=True)
         patterns = [
-            r"是(.+?)[屬性|属性][／/](.+?)[屬性|属性]宝可梦",  # 双属性
-            r"是(.+?)[屬性|属性]宝可梦",  # 单属性
+            r"是(.+?)[屬性属性][／/](.+?)[屬性属性]宝可梦",  # 双属性
+            r"是(.+?)[屬性属性]宝可梦",  # 单属性
         ]
         for pattern in patterns:
             match = re.search(pattern, text)
             if match:
-                groups = match.groups()
-                types = [g.strip().replace("屬", "").replace("属性", "") for g in groups if g.strip()]
+                for group in match.groups():
+                    if group:
+                        raw_types.extend(extract_known_types(group.strip(), allow_fuzzy=True))
                 break
 
-    return list(set(types)) if types else []
+    if not raw_types:
+        return []
+
+    # 去重并保持顺序
+    ordered_types = list(dict.fromkeys(raw_types))
+
+    # 应用映射
+    if name_mapping:
+        ordered_types = [name_mapping.get(t, t) for t in ordered_types]
+
+    return ordered_types
 
 
-def extract_type_effectiveness(soup: BeautifulSoup) -> dict:
+def extract_type_effectiveness(
+    soup: BeautifulSoup,
+    name_mapping: dict[str, str] | None = None
+) -> dict:
     """提取属性克制关系（防守向）"""
     effectiveness = {
         "weak": [],      # 弱点 (2x/4x)
@@ -272,6 +366,11 @@ def extract_type_effectiveness(soup: BeautifulSoup) -> dict:
         effectiveness["immune"] = list(dict.fromkeys(effectiveness["immune"]))
         effectiveness["strong"] = list(dict.fromkeys(effectiveness["strong"]))
         break
+
+    # 应用名称映射
+    if name_mapping:
+        for key in ["weak", "resist", "immune", "strong", "weak_attack"]:
+            effectiveness[key] = [name_mapping.get(t, t) for t in effectiveness[key]]
 
     return effectiveness
 
@@ -385,275 +484,8 @@ def download_image(url: str, save_path: Path) -> bool:
 
 def generate_html(data: dict, output_dir: Path) -> None:
     """生成本地网页"""
-    template = Template("""
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{{ data.number }} {{ data.name }}</title>
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 800px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            padding: 30px;
-            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
-        }
-        .header {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .header h1 {
-            font-size: 2.5em;
-            color: #333;
-            margin-bottom: 10px;
-        }
-        .header .number {
-            font-size: 1.2em;
-            color: #666;
-            font-weight: bold;
-        }
-        .image-section {
-            text-align: center;
-            margin-bottom: 30px;
-        }
-        .image-section img {
-            max-width: 300px;
-            max-height: 300px;
-            border-radius: 10px;
-        }
-        .info-section {
-            margin-bottom: 25px;
-        }
-        .info-section h2 {
-            font-size: 1.5em;
-            color: #444;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #667eea;
-        }
-        .types {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-        }
-        .type {
-            padding: 8px 20px;
-            border-radius: 20px;
-            color: white;
-            font-weight: bold;
-            text-transform: uppercase;
-        }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
-        }
-        .stat-item {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 10px;
-            text-align: center;
-        }
-        .stat-item .label {
-            font-size: 0.9em;
-            color: #666;
-            margin-bottom: 5px;
-        }
-        .stat-item .value {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: #333;
-        }
-        .effectiveness-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .effectiveness-item {
-            padding: 5px 15px;
-            border-radius: 15px;
-            background: #e9ecef;
-            font-size: 0.9em;
-        }
-        .weak { background: #ff6b6b; color: white; }
-        .resist { background: #51cf66; color: white; }
-        .immune { background: #868e96; color: white; }
-        .moves-table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        .moves-table th,
-        .moves-table td {
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #dee2e6;
-        }
-        .moves-table th {
-            background: #f8f9fa;
-            font-weight: bold;
-        }
-        .moves-table tr:hover {
-            background: #f8f9fa;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <div class="header">
-            <div class="number">#{{ data.number }}</div>
-            <h1>{{ data.name }}</h1>
-        </div>
-
-        <div class="image-section">
-            {% if data.image_path %}
-            <img src="{{ data.image_path }}" alt="{{ data.name }}">
-            {% else %}
-            <p>暂无图片</p>
-            {% endif %}
-        </div>
-
-        <div class="info-section">
-            <h2>属性</h2>
-            <div class="types">
-                {% for type in data.types %}
-                <span class="type">{{ type }}</span>
-                {% endfor %}
-            </div>
-        </div>
-
-        <div class="info-section">
-            <h2>种族值</h2>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="label">HP</div>
-                    <div class="value">{{ data.stats.hp or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">攻击</div>
-                    <div class="value">{{ data.stats.attack or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">防御</div>
-                    <div class="value">{{ data.stats.defense or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">特攻</div>
-                    <div class="value">{{ data.stats.sp_attack or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">特防</div>
-                    <div class="value">{{ data.stats.sp_defense or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">速度</div>
-                    <div class="value">{{ data.stats.speed or "?" }}</div>
-                </div>
-            </div>
-        </div>
-
-        <div class="info-section">
-            <h2>属性克制</h2>
-            <h3>弱点</h3>
-            <div class="effectiveness-list">
-                {% for type in data.effectiveness.weak %}
-                <span class="effectiveness-item weak">{{ type }}</span>
-                {% endfor %}
-            </div>
-            <h3 style="margin-top: 15px;">抗性</h3>
-            <div class="effectiveness-list">
-                {% for type in data.effectiveness.resist %}
-                <span class="effectiveness-item resist">{{ type }}</span>
-                {% endfor %}
-            </div>
-            {% if data.effectiveness.immune %}
-            <h3 style="margin-top: 15px;">免疫</h3>
-            <div class="effectiveness-list">
-                {% for type in data.effectiveness.immune %}
-                <span class="effectiveness-item immune">{{ type }}</span>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
-
-        <div class="info-section">
-            <h2>技能列表</h2>
-            <table class="moves-table">
-                <thead>
-                    <tr>
-                        <th>等级</th>
-                        <th>招式</th>
-                        <th>属性</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for move in data.moves %}
-                    <tr>
-                        <td>{{ move.level }}</td>
-                        <td>{{ move.name }}</td>
-                        <td>{{ move.type }}</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-
-    <script>
-        // 开发辅助：检测 index.html 内容变化后自动刷新页面
-        (function () {
-            const CHECK_INTERVAL_MS = 2000;
-            let baseline = null;
-
-            async function checkForUpdates() {
-                // file:// 协议下多数浏览器会拦截 fetch，本逻辑主要用于 http 本地预览
-                if (window.location.protocol === 'file:') {
-                    return;
-                }
-
-                try {
-                    const response = await fetch(window.location.pathname + '?_reload=' + Date.now(), {
-                        cache: 'no-store'
-                    });
-                    if (!response.ok) return;
-
-                    const latest = await response.text();
-                    if (!latest) return;
-
-                    if (baseline === null) {
-                        baseline = latest;
-                        return;
-                    }
-
-                    if (latest !== baseline) {
-                        window.location.reload();
-                        return;
-                    }
-                } catch (e) {
-                    // 忽略轮询异常，避免影响页面使用
-                }
-            }
-
-            checkForUpdates();
-            setInterval(checkForUpdates, CHECK_INTERVAL_MS);
-        })();
-    </script>
-</body>
-</html>
-    """)
+    template_text = TEMPLATE_FILE.read_text(encoding="utf-8")
+    template = Template(template_text)
 
     html_content = template.render(data=data)
 
@@ -698,11 +530,12 @@ def main():
         print(f"正在抓取详情页面: {detail_url}")
         soup = fetch_page(detail_url)
 
-        # 4. 提取信息
+        # 4. 加载映射并提取信息
         print("正在提取信息...")
+        name_mapping = load_name_mapping()
         stats = extract_base_stats(soup)
-        types = extract_types(soup)
-        effectiveness = extract_type_effectiveness(soup)
+        types = extract_types(soup, name_mapping)
+        effectiveness = extract_type_effectiveness(soup, name_mapping)
         moves = extract_moves(soup)
         image_url = extract_image_url(soup, number)
 
