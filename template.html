@@ -135,15 +135,11 @@
             background: #c8ffa3;
             font-weight: 800;
         }
-        .stats-table .head-sub {
-            font-size: 0.84em;
-            font-weight: 700;
-        }
         .stats-table .name-cell {
             text-align: left;
             font-weight: 800;
             font-size: 1em;
-            width: 104px;
+            width: 52px;
             white-space: nowrap;
         }
         .stats-table .name-wrap {
@@ -280,12 +276,8 @@
             <table class="stats-table">
                 <thead>
                     <tr>
-                        <th colspan="2" rowspan="2">种族值</th>
-                        <th colspan="2">能力值范围<br><span class="head-sub">基础点数 · GO力量 · 奋斗等级</span></th>
-                    </tr>
-                    <tr>
-                        <th>Lv.50</th>
-                        <th>Lv.100</th>
+                        <th colspan="2">种族值</th>
+                        <th>能力值范围</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -303,7 +295,6 @@
                             </div>
                         </td>
                         <td>{{ row.lv50 }}</td>
-                        <td>{{ row.lv100 }}</td>
                     </tr>
                     {% endfor %}
                     <tr class="total-row">
@@ -314,7 +305,6 @@
                             </div>
                         </td>
                         <td></td>
-                        <td>—</td>
                         <td>—</td>
                     </tr>
                 </tbody>
