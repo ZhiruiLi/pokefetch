@@ -84,6 +84,11 @@
             width: 160px;
             font-weight: 700;
         }
+        .form-title {
+            margin: 10px 0 8px;
+            font-size: 1.1em;
+            color: #333;
+        }
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(3, 1fr);
@@ -141,23 +146,27 @@
 
         <div class="info-section">
             <h2>属性与属性克制</h2>
+
+            {% for form in data.type_effectiveness_forms %}
+            <h3 class="form-title">{{ form.form_name }}</h3>
+
             {% set ns = namespace(weak_display=[], resist_display=[]) %}
-            {% for t in data.effectiveness.weak %}
+            {% for t in form.effectiveness.weak %}
                 {% set ns.weak_display = ns.weak_display + [t] %}
             {% endfor %}
-            {% for t in data.effectiveness.get('weak_4x', []) %}
+            {% for t in form.effectiveness.get('weak_4x', []) %}
                 {% set ns.weak_display = ns.weak_display + [t ~ '(4倍)'] %}
             {% endfor %}
-            {% for t in data.effectiveness.resist %}
+            {% for t in form.effectiveness.resist %}
                 {% set ns.resist_display = ns.resist_display + [t] %}
             {% endfor %}
-            {% for t in data.effectiveness.strong %}
+            {% for t in form.effectiveness.strong %}
                 {% set ns.resist_display = ns.resist_display + [t ~ '(4倍)'] %}
             {% endfor %}
 
             <table class="defense-table">
                 <tr>
-                    <td class="pokemon-types">{{ data.types | join('+') }}</td>
+                    <td class="pokemon-types">{{ form.types | join('+') }}</td>
                     <td class="defense-title">防守端（抗性）</td>
                 </tr>
                 <tr>
@@ -169,10 +178,11 @@
                     <td>{{ ns.resist_display | join('，') }}</td>
                 </tr>
                 <tr>
-                    <td class="row-label">免疫{{ data.effectiveness.immune | length }}</td>
-                    <td>{{ data.effectiveness.immune | join('，') }}</td>
+                    <td class="row-label">免疫{{ form.effectiveness.immune | length }}</td>
+                    <td>{{ form.effectiveness.immune | join('，') }}</td>
                 </tr>
             </table>
+            {% endfor %}
         </div>
 
         <div class="info-section">

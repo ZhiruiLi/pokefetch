@@ -297,14 +297,15 @@ def extract_type_effectiveness(
     soup: BeautifulSoup,
     name_mapping: dict[str, str] | None = None
 ) -> dict:
-    """提取属性克制关系（防守向）"""
-    effectiveness = {
-        "weak": [],       # 弱点 (2x)
-        "weak_4x": [],    # 弱点 (4x)
-        "resist": [],     # 抗性 (0.5x)
-        "immune": [],     # 免疫 (0x)
-        "strong": [],     # 强抗性 (0.25x)
-        "weak_attack": []  # 预留：进攻向劣势
+    """提取属性克制关系（支持多形态）"""
+    result = {
+        "weak": [],
+        "weak_4x": [],
+        "resist": [],
+        "immune": [],
+        "strong": [],
+        "weak_attack": [],
+        "forms": []
     }
 
     # 查找属性相性章节（兼容简繁体）
@@ -317,10 +318,12 @@ def extract_type_effectiveness(
             break
 
     if not target_header:
-        return effectiveness
+        return result
 
     # 在章节后查找相性表格
-    tables = target_header.find_all_next("table", class_="roundy", limit=5)
+    tables = target_header.find_all_next("table", class_="roundy", limit=8)
+
+    forms: list[dict] = []
 
     for table in tables:
         rows = table.find_all("tr")
@@ -328,10 +331,7 @@ def extract_type_effectiveness(
             continue
 
         header_cells = rows[0].find_all(["th", "td"])
-        data_cells = rows[1].find_all(["th", "td"])
-
-        # 防守向表格特征：首行为“进攻招式属性/一般/格斗...”，次行前3列是防守方属性和空白
-        if len(header_cells) < 19 or len(data_cells) < 21:
+        if len(header_cells) < 19:
             continue
 
         header_title = header_cells[0].get_text(strip=True)
@@ -339,43 +339,114 @@ def extract_type_effectiveness(
             continue
 
         attack_types = [c.get_text(strip=True) for c in header_cells[1:19]]
-        multipliers = [c.get_text(strip=True) for c in data_cells[3:3 + len(attack_types)]]
 
-        if len(multipliers) != len(attack_types):
-            continue
-
-        for type_name, mult in zip(attack_types, multipliers):
-            type_name = type_name.replace("屬性", "").replace("屬", "").replace("属性", "")
-            mult = mult.strip()
-
-            if not type_name or not mult:
+        # 每行都可能是一个形态/计算方式
+        for row_index, row in enumerate(rows[1:]):
+            cells = row.find_all(["th", "td"])
+            if len(cells) < len(attack_types) + 2:
                 continue
 
-            if mult in ["0", "0×"]:
-                effectiveness["immune"].append(type_name)
-            elif mult in ["1⁄4", "1/4", "¼"]:
-                effectiveness["strong"].append(type_name)
-            elif mult in ["1⁄2", "1/2", "½"]:
-                effectiveness["resist"].append(type_name)
-            elif mult in ["2", "2×"]:
-                effectiveness["weak"].append(type_name)
-            elif mult in ["4", "4×"]:
-                effectiveness["weak_4x"].append(type_name)
+            prefix_count = len(cells) - len(attack_types)
+            if prefix_count < 2:
+                continue
 
-        # 去重并保持顺序
-        effectiveness["weak"] = list(dict.fromkeys(effectiveness["weak"]))
-        effectiveness["weak_4x"] = list(dict.fromkeys(effectiveness["weak_4x"]))
-        effectiveness["resist"] = list(dict.fromkeys(effectiveness["resist"]))
-        effectiveness["immune"] = list(dict.fromkeys(effectiveness["immune"]))
-        effectiveness["strong"] = list(dict.fromkeys(effectiveness["strong"]))
-        break
+            meta_cells = cells[:prefix_count]
+            multiplier_cells = cells[prefix_count:prefix_count + len(attack_types)]
+            if len(multiplier_cells) != len(attack_types):
+                continue
 
-    # 应用名称映射
-    if name_mapping:
-        for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
-            effectiveness[key] = [name_mapping.get(t, t) for t in effectiveness[key]]
+            # 属性（前两列）
+            form_types: list[str] = []
+            for cell in meta_cells[:2]:
+                type_text = cell.get_text(strip=True)
+                type_text = type_text.replace("屬性", "").replace("屬", "").replace("属性", "")
+                if type_text and type_text not in ["—", "-", "未知"]:
+                    form_types.append(type_text)
+            form_types = list(dict.fromkeys(form_types))
 
-    return effectiveness
+            # 形态名（第3列，可能为空）
+            raw_form_name = ""
+            if prefix_count >= 3:
+                raw_form_name = meta_cells[2].get_text(" ", strip=True)
+            raw_form_name = raw_form_name.replace("未知", "").strip()
+            form_name = raw_form_name if raw_form_name else "默认"
+
+            form_effectiveness = {
+                "weak": [],
+                "weak_4x": [],
+                "resist": [],
+                "immune": [],
+                "strong": [],
+                "weak_attack": []
+            }
+
+            for attack_type, cell in zip(attack_types, multiplier_cells):
+                type_name = attack_type.replace("屬性", "").replace("屬", "").replace("属性", "").strip()
+                mult = cell.get_text(strip=True)
+                mult = mult.replace(" ", "")
+
+                if not type_name or not mult:
+                    continue
+
+                if mult in ["0", "0×"]:
+                    form_effectiveness["immune"].append(type_name)
+                elif mult in ["1⁄4", "1/4", "¼"]:
+                    form_effectiveness["strong"].append(type_name)
+                elif mult in ["1⁄2", "1/2", "½"]:
+                    form_effectiveness["resist"].append(type_name)
+                elif mult in ["2", "2×"]:
+                    form_effectiveness["weak"].append(type_name)
+                elif mult in ["4", "4×"]:
+                    form_effectiveness["weak_4x"].append(type_name)
+
+            # 去重并保持顺序
+            for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
+                form_effectiveness[key] = list(dict.fromkeys(form_effectiveness[key]))
+
+            # 应用名称映射
+            if name_mapping:
+                form_types = [name_mapping.get(t, t) for t in form_types]
+                for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
+                    form_effectiveness[key] = [name_mapping.get(t, t) for t in form_effectiveness[key]]
+
+            if not form_types and not any(form_effectiveness.values()):
+                continue
+
+            forms.append({
+                "form_name": form_name,
+                "types": form_types,
+                "effectiveness": form_effectiveness,
+                "row_index": row_index
+            })
+
+        # 使用第一张有效防守表
+        if forms:
+            break
+
+    if not forms:
+        return result
+
+    # 默认形态优先，其他保持出现顺序
+    default_forms = [f for f in forms if f["form_name"] == "默认"]
+    other_forms = [f for f in forms if f["form_name"] != "默认"]
+    sorted_forms = default_forms + other_forms
+
+    # 去掉内部排序字段
+    result["forms"] = [
+        {
+            "form_name": f["form_name"],
+            "types": f["types"],
+            "effectiveness": f["effectiveness"]
+        }
+        for f in sorted_forms
+    ]
+
+    # 兼容旧字段：取默认/首个形态
+    first_eff = result["forms"][0]["effectiveness"]
+    for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
+        result[key] = first_eff.get(key, [])
+
+    return result
 
 
 def extract_moves(soup: BeautifulSoup) -> list:
@@ -537,8 +608,21 @@ def main():
         print("正在提取信息...")
         name_mapping = load_name_mapping()
         stats = extract_base_stats(soup)
-        types = extract_types(soup, name_mapping)
-        effectiveness = extract_type_effectiveness(soup, name_mapping)
+        effectiveness_data = extract_type_effectiveness(soup, name_mapping)
+        type_effectiveness_forms = effectiveness_data.get("forms", [])
+
+        if type_effectiveness_forms:
+            types = type_effectiveness_forms[0].get("types", [])
+            effectiveness = type_effectiveness_forms[0].get("effectiveness", {})
+        else:
+            types = extract_types(soup, name_mapping)
+            effectiveness = effectiveness_data
+            type_effectiveness_forms = [{
+                "form_name": "默认",
+                "types": types,
+                "effectiveness": effectiveness
+            }]
+
         moves = extract_moves(soup)
         image_url = extract_image_url(soup, number)
 
@@ -557,6 +641,7 @@ def main():
             "types": types,
             "stats": stats,
             "effectiveness": effectiveness,
+            "type_effectiveness_forms": type_effectiveness_forms,
             "moves": moves,
             "image_path": image_path
         }
