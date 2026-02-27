@@ -245,6 +245,149 @@ def extract_base_stats(soup: BeautifulSoup) -> dict:
     return stats
 
 
+def parse_stats_table(table: BeautifulSoup, form_name: str) -> dict | None:
+    """解析单个种族值表格（基础值 + Lv.50/Lv.100）"""
+    rows_data = []
+    total = ""
+
+    stat_key_map = {
+        "ＨＰ": ("hp", "HP"),
+        "HP": ("hp", "HP"),
+        "攻击": ("attack", "攻击"),
+        "攻擊": ("attack", "攻击"),
+        "防御": ("defense", "防御"),
+        "防禦": ("defense", "防御"),
+        "特攻": ("sp_attack", "特攻"),
+        "特防": ("sp_defense", "特防"),
+        "速度": ("speed", "速度"),
+    }
+
+    for row in table.find_all("tr"):
+        first_th = row.find("th")
+        if not first_th:
+            continue
+
+        first_text = first_th.get_text(" ", strip=True)
+        if not first_text:
+            continue
+
+        # 总和行
+        if "总和" in first_text:
+            total_match = re.search(r"总和[：:]\s*(\d+)", first_text)
+            if total_match:
+                total = total_match.group(1)
+            continue
+
+        matched = None
+        for stat_name, (stat_key, label) in stat_key_map.items():
+            if first_text.startswith(stat_name):
+                matched = (stat_key, label)
+                break
+
+        if not matched:
+            continue
+
+        stat_key, label = matched
+
+        base_match = re.search(r"[：:]\s*(\d+)", first_text)
+        base = base_match.group(1) if base_match else ""
+
+        # 仅取 BasePoint 的 Lv.50/Lv.100 列
+        basepoint_cells = row.find_all("th", class_=lambda cls: cls and "BasePoint" in cls)
+        lv50 = basepoint_cells[0].get_text(" ", strip=True) if len(basepoint_cells) >= 1 else "—"
+        lv100 = basepoint_cells[1].get_text(" ", strip=True) if len(basepoint_cells) >= 2 else "—"
+
+        lv50 = re.sub(r"\s+", " ", lv50)
+        lv100 = re.sub(r"\s+", " ", lv100)
+
+        rows_data.append({
+            "key": stat_key,
+            "label": label,
+            "base": base or "?",
+            "lv50": lv50 or "—",
+            "lv100": lv100 or "—"
+        })
+
+    if not rows_data:
+        return None
+
+    if not total:
+        numeric = [int(r["base"]) for r in rows_data if str(r["base"]).isdigit()]
+        total = str(sum(numeric)) if numeric else "?"
+
+    return {
+        "form_name": form_name,
+        "rows": rows_data,
+        "total": total
+    }
+
+
+def extract_stats_tables(soup: BeautifulSoup) -> list[dict]:
+    """提取种族值表格（支持多形态）"""
+    forms = []
+
+    # 提取形态标签映射（如 1base -> 一般, 2base -> 超级进化）
+    form_label_map: dict[str, str] = {}
+    for span in soup.find_all("span", class_=re.compile(r"toggle-[pl]-\d+base")):
+        classes = span.get("class", [])
+        text = span.get_text(" ", strip=True)
+        if not text:
+            continue
+        for cls in classes:
+            m = re.match(r"toggle-[pl]-(\d+)base", cls)
+            if m:
+                idx = m.group(1)
+                if idx not in form_label_map:
+                    form_label_map[idx] = text
+
+    # 先尝试解析多形态块
+    toggle_blocks = soup.find_all("div", class_=re.compile(r"toggle-content"))
+    for block in toggle_blocks:
+        classes = block.get("class", [])
+        if "toggle-cbase" not in classes:
+            continue
+
+        idx = None
+        for cls in classes:
+            m = re.match(r"toggle-(\d+)base", cls)
+            if m:
+                idx = m.group(1)
+                break
+
+        table = block.find("table", class_="roundy")
+        if not table:
+            continue
+
+        table_text = table.get_text(" ", strip=True)
+        if "种族值" not in table_text and "種族值" not in table_text:
+            continue
+        if "Lv.50" not in table_text and "Lv.100" not in table_text:
+            continue
+
+        label = form_label_map.get(idx or "", "")
+        form_name = "默认" if (idx == "1" or label in ["一般", "通常", ""]) else label
+
+        parsed = parse_stats_table(table, form_name)
+        if parsed:
+            forms.append(parsed)
+
+    # 多形态失败时，回退到首个种族值表
+    if not forms:
+        tables = soup.find_all("table", class_="roundy")
+        for table in tables:
+            text = table.get_text(" ", strip=True)
+            if ("种族值" in text or "種族值" in text) and "Lv.50" in text and "Lv.100" in text:
+                parsed = parse_stats_table(table, "默认")
+                if parsed:
+                    forms.append(parsed)
+                break
+
+    # 默认形态优先
+    defaults = [f for f in forms if f["form_name"] == "默认"]
+    others = [f for f in forms if f["form_name"] != "默认"]
+    return defaults + others
+
+
 def extract_types(soup: BeautifulSoup, name_mapping: dict[str, str] | None = None) -> list:
     """提取属性"""
     raw_types: list[str] = []
@@ -673,7 +816,32 @@ def main():
         # 4. 加载映射并提取信息
         print("正在提取信息...")
         name_mapping = load_name_mapping()
-        stats = extract_base_stats(soup)
+        stats_tables = extract_stats_tables(soup)
+        if stats_tables:
+            first_rows = {r["key"]: r["base"] for r in stats_tables[0]["rows"]}
+            stats = {
+                "hp": first_rows.get("hp", "?"),
+                "attack": first_rows.get("attack", "?"),
+                "defense": first_rows.get("defense", "?"),
+                "sp_attack": first_rows.get("sp_attack", "?"),
+                "sp_defense": first_rows.get("sp_defense", "?"),
+                "speed": first_rows.get("speed", "?")
+            }
+        else:
+            stats = extract_base_stats(soup)
+            stats_tables = [{
+                "form_name": "默认",
+                "rows": [
+                    {"key": "hp", "label": "HP", "base": stats.get("hp", "?"), "lv50": "—", "lv100": "—"},
+                    {"key": "attack", "label": "攻击", "base": stats.get("attack", "?"), "lv50": "—", "lv100": "—"},
+                    {"key": "defense", "label": "防御", "base": stats.get("defense", "?"), "lv50": "—", "lv100": "—"},
+                    {"key": "sp_attack", "label": "特攻", "base": stats.get("sp_attack", "?"), "lv50": "—", "lv100": "—"},
+                    {"key": "sp_defense", "label": "特防", "base": stats.get("sp_defense", "?"), "lv50": "—", "lv100": "—"},
+                    {"key": "speed", "label": "速度", "base": stats.get("speed", "?"), "lv50": "—", "lv100": "—"}
+                ],
+                "total": "?"
+            }]
+
         effectiveness_data = extract_type_effectiveness(soup, name_mapping)
         type_effectiveness_forms = effectiveness_data.get("forms", [])
 
@@ -708,6 +876,7 @@ def main():
             "name": name,
             "types": types,
             "stats": stats,
+            "stats_tables": stats_tables,
             "effectiveness": effectiveness,
             "type_effectiveness_forms": type_effectiveness_forms,
             "moves": moves,

@@ -98,26 +98,34 @@
             font-size: 1.1em;
             color: #333;
         }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 15px;
+        .stats-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #d9d9d9;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-top: 8px;
         }
-        .stat-item {
-            background: #f8f9fa;
-            padding: 15px;
-            border-radius: 10px;
+        .stats-table th,
+        .stats-table td {
+            border: 1px solid #e6e6e6;
+            padding: 10px 12px;
             text-align: center;
+            color: #222;
+            background: #fff;
         }
-        .stat-item .label {
-            font-size: 0.9em;
-            color: #666;
-            margin-bottom: 5px;
+        .stats-table thead th {
+            background: #f5f5f5;
+            font-weight: 700;
         }
-        .stat-item .value {
-            font-size: 1.5em;
-            font-weight: bold;
-            color: #333;
+        .stats-table td:first-child {
+            text-align: left;
+            font-weight: 700;
+            width: 140px;
+        }
+        .stats-table .total-row td {
+            background: #fffdf2;
+            font-weight: 700;
         }
         .moves-table {
             width: 100%;
@@ -211,32 +219,35 @@
 
         <div class="info-section">
             <h2>种族值</h2>
-            <div class="stats-grid">
-                <div class="stat-item">
-                    <div class="label">HP</div>
-                    <div class="value">{{ data.stats.hp or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">攻击</div>
-                    <div class="value">{{ data.stats.attack or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">防御</div>
-                    <div class="value">{{ data.stats.defense or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">特攻</div>
-                    <div class="value">{{ data.stats.sp_attack or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">特防</div>
-                    <div class="value">{{ data.stats.sp_defense or "?" }}</div>
-                </div>
-                <div class="stat-item">
-                    <div class="label">速度</div>
-                    <div class="value">{{ data.stats.speed or "?" }}</div>
-                </div>
-            </div>
+            {% for form in data.stats_tables %}
+            <h3 class="form-title">{{ form.form_name }}</h3>
+            <table class="stats-table">
+                <thead>
+                    <tr>
+                        <th>能力值</th>
+                        <th>种族值</th>
+                        <th>Lv.50</th>
+                        <th>Lv.100</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in form.rows %}
+                    <tr>
+                        <td>{{ row.label }}</td>
+                        <td>{{ row.base }}</td>
+                        <td>{{ row.lv50 }}</td>
+                        <td>{{ row.lv100 }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr class="total-row">
+                        <td>总和</td>
+                        <td>{{ form.total }}</td>
+                        <td>—</td>
+                        <td>—</td>
+                    </tr>
+                </tbody>
+            </table>
+            {% endfor %}
         </div>
 
 
