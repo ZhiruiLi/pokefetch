@@ -3,7 +3,7 @@ setlocal
 
 cd /d "%~dp0"
 
-echo [1/3] Checking PyInstaller...
+echo [1/4] Checking PyInstaller...
 uv run pyinstaller --version >nul 2>nul
 if errorlevel 1 (
     echo PyInstaller not found in environment. Installing as dev dependency...
@@ -14,12 +14,17 @@ if errorlevel 1 (
     )
 )
 
-echo [2/3] Building pokefetch.exe...
+echo [2/4] Building pokefetch.exe...
+if not exist "pokefetch.ico" (
+    echo Missing icon file: pokefetch.ico
+    exit /b 1
+)
 uv run pyinstaller ^
   --noconfirm ^
   --clean ^
   --onefile ^
   --name pokefetch ^
+  --icon "pokefetch.ico" ^
   --add-data "template.html;." ^
   --add-data "wiki_site_styles.css;." ^
   --add-data "icons;icons" ^
