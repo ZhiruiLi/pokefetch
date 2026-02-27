@@ -1023,14 +1023,14 @@ def download_image(url: str, save_path: Path) -> bool:
         return False
 
 
-def generate_html(data: dict, output_dir: Path) -> None:
+def generate_html(data: dict, output_dir: Path, html_filename: str) -> Path:
     """生成本地网页"""
     template_text = TEMPLATE_FILE.read_text(encoding="utf-8")
     template = Template(template_text)
 
     html_content = template.render(data=data)
 
-    output_file = output_dir / "index.html"
+    output_file = output_dir / html_filename
     output_file.write_text(html_content, encoding="utf-8")
 
     # 复制原站样式到输出目录，尽量复刻视觉效果
@@ -1042,6 +1042,7 @@ def generate_html(data: dict, output_dir: Path) -> None:
         shutil.copytree(ICONS_DIR, output_dir / "icons", dirs_exist_ok=True)
 
     print(f"网页已生成: {output_file}")
+    return output_file
 
 
 def main():
@@ -1060,6 +1061,11 @@ def main():
         action="store_true",
         help="刷新缓存（重新请求并覆盖缓存文件）"
     )
+    parser.add_argument(
+        "--output-dir",
+        default="out",
+        help="输出目录（默认: out）"
+    )
 
     args = parser.parse_args()
 
@@ -1072,8 +1078,8 @@ def main():
         number, name, detail_url = find_pokemon_link(args.identifier)
 
         # 2. 创建输出目录
-        output_dir = Path(f"{number}{name}")
-        output_dir.mkdir(exist_ok=True)
+        output_dir = Path(args.output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
         print(f"输出目录: {output_dir}")
 
         # 3. 抓取详情页面
@@ -1162,9 +1168,11 @@ def main():
         }
 
         # 7. 生成网页
-        generate_html(data, output_dir)
+        html_filename = f"{number}{name}.html"
+        html_file = generate_html(data, output_dir, html_filename)
 
         print(f"\n完成! 输出目录: {output_dir.absolute()}")
+        print(f"网页文件: {html_file.absolute()}")
 
     except ValueError as e:
         print(f"错误: {e}")
