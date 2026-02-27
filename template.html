@@ -57,18 +57,32 @@
             padding-bottom: 10px;
             border-bottom: 2px solid #667eea;
         }
-        .types {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
+        .defense-table {
+            width: 100%;
+            border-collapse: collapse;
+            border: 1px solid #d9d9d9;
+            border-radius: 8px;
+            overflow: hidden;
         }
-        .type {
-            padding: 8px 20px;
-            border-radius: 20px;
-            color: white;
-            background: #667eea;
-            font-weight: bold;
-            text-transform: uppercase;
+        .defense-table td {
+            border: 1px solid #e6e6e6;
+            padding: 10px 12px;
+            color: #000;
+            background: #fff;
+            vertical-align: top;
+        }
+        .defense-table .pokemon-types {
+            background: #fff7cc;
+            font-weight: 700;
+        }
+        .defense-table .defense-title {
+            background: #f2f2f2;
+            color: #7aa7d9;
+            font-weight: 700;
+        }
+        .defense-table .row-label {
+            width: 160px;
+            font-weight: 700;
         }
         .stats-grid {
             display: grid;
@@ -91,20 +105,6 @@
             font-weight: bold;
             color: #333;
         }
-        .effectiveness-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 10px;
-        }
-        .effectiveness-item {
-            padding: 5px 15px;
-            border-radius: 15px;
-            background: #e9ecef;
-            font-size: 0.9em;
-        }
-        .weak { background: #ff6b6b; color: white; }
-        .resist { background: #51cf66; color: white; }
-        .immune { background: #868e96; color: white; }
         .moves-table {
             width: 100%;
             border-collapse: collapse;
@@ -140,12 +140,39 @@
         </div>
 
         <div class="info-section">
-            <h2>属性</h2>
-            <div class="types">
-                {% for type in data.types %}
-                <span class="type">{{ type }}</span>
-                {% endfor %}
-            </div>
+            <h2>属性与属性克制</h2>
+            {% set ns = namespace(weak_display=[], resist_display=[]) %}
+            {% for t in data.effectiveness.weak %}
+                {% set ns.weak_display = ns.weak_display + [t] %}
+            {% endfor %}
+            {% for t in data.effectiveness.get('weak_4x', []) %}
+                {% set ns.weak_display = ns.weak_display + [t ~ '(4倍)'] %}
+            {% endfor %}
+            {% for t in data.effectiveness.resist %}
+                {% set ns.resist_display = ns.resist_display + [t] %}
+            {% endfor %}
+            {% for t in data.effectiveness.strong %}
+                {% set ns.resist_display = ns.resist_display + [t ~ '(4倍)'] %}
+            {% endfor %}
+
+            <table class="defense-table">
+                <tr>
+                    <td class="pokemon-types">{{ data.types | join('+') }}</td>
+                    <td class="defense-title">防守端（抗性）</td>
+                </tr>
+                <tr>
+                    <td class="row-label">弱点{{ ns.weak_display | length }}</td>
+                    <td>{{ ns.weak_display | join('，') }}</td>
+                </tr>
+                <tr>
+                    <td class="row-label">抗性{{ ns.resist_display | length }}</td>
+                    <td>{{ ns.resist_display | join('，') }}</td>
+                </tr>
+                <tr>
+                    <td class="row-label">免疫{{ data.effectiveness.immune | length }}</td>
+                    <td>{{ data.effectiveness.immune | join('，') }}</td>
+                </tr>
+            </table>
         </div>
 
         <div class="info-section">
@@ -178,29 +205,6 @@
             </div>
         </div>
 
-        <div class="info-section">
-            <h2>属性克制</h2>
-            <h3>弱点</h3>
-            <div class="effectiveness-list">
-                {% for type in data.effectiveness.weak %}
-                <span class="effectiveness-item weak">{{ type }}</span>
-                {% endfor %}
-            </div>
-            <h3 style="margin-top: 15px;">抗性</h3>
-            <div class="effectiveness-list">
-                {% for type in data.effectiveness.resist %}
-                <span class="effectiveness-item resist">{{ type }}</span>
-                {% endfor %}
-            </div>
-            {% if data.effectiveness.immune %}
-            <h3 style="margin-top: 15px;">免疫</h3>
-            <div class="effectiveness-list">
-                {% for type in data.effectiveness.immune %}
-                <span class="effectiveness-item immune">{{ type }}</span>
-                {% endfor %}
-            </div>
-            {% endif %}
-        </div>
 
         <div class="info-section">
             <h2>技能列表</h2>

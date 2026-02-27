@@ -299,10 +299,11 @@ def extract_type_effectiveness(
 ) -> dict:
     """提取属性克制关系（防守向）"""
     effectiveness = {
-        "weak": [],      # 弱点 (2x/4x)
-        "resist": [],    # 抗性 (0.5x)
-        "immune": [],    # 免疫 (0x)
-        "strong": [],    # 强抗性 (0.25x)
+        "weak": [],       # 弱点 (2x)
+        "weak_4x": [],    # 弱点 (4x)
+        "resist": [],     # 抗性 (0.5x)
+        "immune": [],     # 免疫 (0x)
+        "strong": [],     # 强抗性 (0.25x)
         "weak_attack": []  # 预留：进攻向劣势
     }
 
@@ -354,14 +355,16 @@ def extract_type_effectiveness(
                 effectiveness["immune"].append(type_name)
             elif mult in ["1⁄4", "1/4", "¼"]:
                 effectiveness["strong"].append(type_name)
-                effectiveness["resist"].append(type_name)
             elif mult in ["1⁄2", "1/2", "½"]:
                 effectiveness["resist"].append(type_name)
-            elif mult in ["2", "2×", "4", "4×"]:
+            elif mult in ["2", "2×"]:
                 effectiveness["weak"].append(type_name)
+            elif mult in ["4", "4×"]:
+                effectiveness["weak_4x"].append(type_name)
 
         # 去重并保持顺序
         effectiveness["weak"] = list(dict.fromkeys(effectiveness["weak"]))
+        effectiveness["weak_4x"] = list(dict.fromkeys(effectiveness["weak_4x"]))
         effectiveness["resist"] = list(dict.fromkeys(effectiveness["resist"]))
         effectiveness["immune"] = list(dict.fromkeys(effectiveness["immune"]))
         effectiveness["strong"] = list(dict.fromkeys(effectiveness["strong"]))
@@ -369,7 +372,7 @@ def extract_type_effectiveness(
 
     # 应用名称映射
     if name_mapping:
-        for key in ["weak", "resist", "immune", "strong", "weak_attack"]:
+        for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
             effectiveness[key] = [name_mapping.get(t, t) for t in effectiveness[key]]
 
     return effectiveness
