@@ -366,17 +366,21 @@
             <table class="moves-table">
                 <thead>
                     <tr>
-                        <th>等级</th>
+                        <th>来源</th>
                         <th>招式</th>
                         <th>属性</th>
+                        <th>分类</th>
+                        <th>威力</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for move in data.moves %}
                     <tr>
-                        <td>{{ move.level }}</td>
+                        <td>{{ move.source }}</td>
                         <td>{{ move.name }}</td>
                         <td>{{ move.type }}</td>
+                        <td>{{ move.category }}</td>
+                        <td>{{ move.power }}</td>
                     </tr>
                     {% endfor %}
                 </tbody>

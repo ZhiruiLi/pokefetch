@@ -713,56 +713,140 @@ def extract_type_effectiveness(
     return result
 
 
-def extract_moves(soup: BeautifulSoup) -> list:
-    """提取技能列表"""
-    moves = []
+def normalize_move_header_text(text: str) -> str:
+    """规范化招式表头文本（简繁统一）"""
+    normalized = re.sub(r"\s+", "", text)
+    normalized = normalized.replace("屬性", "属性").replace("分類", "分类").replace("等級", "等级")
+    return normalized
 
-    # 查找可学会招式章节 - 尝试多种可能的标题
-    headers = soup.find_all(["h2", "h3", "h4"])
-    target_header = None
 
-    for header in headers:
-        header_text = header.get_text(strip=True)
-        if any(keyword in header_text for keyword in ["可学会招式", "可學會招式", "招式表"]):
-            target_header = header
+def expand_cells_by_colspan(cells: list[BeautifulSoup]) -> list[BeautifulSoup]:
+    """按 colspan 展开单元格，便于按列索引读取"""
+    expanded: list[BeautifulSoup] = []
+    for cell in cells:
+        colspan_text = cell.get("colspan", "1")
+        colspan = int(colspan_text) if str(colspan_text).isdigit() else 1
+        expanded.extend([cell] * max(colspan, 1))
+    return expanded
+
+
+def iter_section_tables(header: BeautifulSoup):
+    """遍历某个标题节点到下一个标题前的所有 table"""
+    for sibling in header.find_next_siblings():
+        if getattr(sibling, "name", None) in ["h2", "h3", "h4", "h5"]:
             break
 
-    if not target_header:
-        return moves
+        if getattr(sibling, "name", None) == "table":
+            yield sibling
+        elif hasattr(sibling, "find_all"):
+            for table in sibling.find_all("table"):
+                yield table
 
-    # 查找招式表格 - 在标题后查找包含招式数据的表格
-    tables = target_header.find_all_next("table", limit=5)
 
-    for table in tables:
-        # 检查表格是否包含招式数据
-        text = table.get_text(strip=True)
-        if any(keyword in text for keyword in ["撞击", "摇尾巴", "藤鞭", "等級", "等级"]):
-            rows = table.find_all("tr")
-            for row in rows:
-                cells = row.find_all("td")
-                # 需要至少3列数据（等级、招式名、属性）
-                if len(cells) >= 4:
-                    # 第一列是等级，第三列是招式名，第四列是属性
-                    level = cells[0].get_text(strip=True)
-                    name = cells[2].get_text(strip=True)
-                    move_type = cells[3].get_text(strip=True)
+def find_move_columns(table: BeautifulSoup) -> dict[str, int] | None:
+    """在表格中定位招式字段列索引（招式/属性/分类/威力）"""
+    for row in table.find_all("tr"):
+        th_cells = row.find_all("th")
+        if not th_cells:
+            continue
 
-                    # 清理数据
-                    name = name.replace("[详]", "").replace("[詳]", "")
-                    move_type = move_type.replace("屬性", "").replace("屬", "").replace("属性", "")
+        expanded_headers = expand_cells_by_colspan(th_cells)
+        header_texts = [normalize_move_header_text(c.get_text(" ", strip=True)) for c in expanded_headers]
 
-                    # 只添加有效的招式数据（有名称且不是表头）
-                    if name and name not in ["—", "-", "", "招式"] and not name.startswith("[[|"):
-                        moves.append({
-                            "level": level if level else "—",
-                            "name": name,
-                            "type": move_type
-                        })
+        name_idx = next((i for i, t in enumerate(header_texts) if t == "招式"), None)
+        type_idx = next((i for i, t in enumerate(header_texts) if t == "属性"), None)
+        category_idx = next((i for i, t in enumerate(header_texts) if t == "分类"), None)
+        power_idx = next((i for i, t in enumerate(header_texts) if t == "威力"), None)
 
-            if moves:
-                break
+        if None not in (name_idx, type_idx, category_idx, power_idx):
+            return {
+                "name": name_idx,
+                "type": type_idx,
+                "category": category_idx,
+                "power": power_idx,
+            }
 
-    return moves[:20]  # 限制数量
+    return None
+
+
+def parse_moves_from_table(table: BeautifulSoup, source: str) -> list[dict]:
+    """按列语义解析单个招式表"""
+    col_map = find_move_columns(table)
+    if not col_map:
+        return []
+
+    moves: list[dict] = []
+
+    for row in table.find_all("tr"):
+        td_cells = row.find_all("td")
+        if not td_cells:
+            continue
+
+        expanded_cells = expand_cells_by_colspan(td_cells)
+
+        name = expanded_cells[col_map["name"]].get_text(" ", strip=True) if len(expanded_cells) > col_map["name"] else ""
+        move_type = expanded_cells[col_map["type"]].get_text(" ", strip=True) if len(expanded_cells) > col_map["type"] else ""
+        category = expanded_cells[col_map["category"]].get_text(" ", strip=True) if len(expanded_cells) > col_map["category"] else ""
+        power = expanded_cells[col_map["power"]].get_text(" ", strip=True) if len(expanded_cells) > col_map["power"] else ""
+
+        name = name.replace("[详]", "").replace("[詳]", "")
+        name = re.sub(r"\s+", "", name)
+        move_type = move_type.replace("屬性", "").replace("屬", "").replace("属性", "").strip()
+        category = category.replace("招式", "").strip()
+        power = re.sub(r"\s+", "", power)
+
+        if not name or name in ["—", "-", "", "招式"] or name.startswith("[[|"):
+            continue
+
+        valid_types = set(TYPE_ORDER) | set(TYPE_ICON_ALIASES.keys()) | set(TYPE_ICON_ALIASES.values())
+        valid_categories = {"物理", "特殊", "变化", "變化", "—"}
+        if move_type not in valid_types:
+            continue
+        if category not in valid_categories:
+            continue
+
+        moves.append({
+            "source": source,
+            "name": name,
+            "type": move_type or "—",
+            "category": "变化" if category == "變化" else (category or "—"),
+            "power": power or "—",
+        })
+
+    return moves
+
+
+def extract_moves_from_section(soup: BeautifulSoup, section_keywords: list[str], source: str) -> list[dict]:
+    """按章节提取招式数据"""
+    headers = soup.find_all(["h2", "h3", "h4", "h5"])
+
+    for header in headers:
+        header_text = header.get_text(" ", strip=True)
+        if not any(keyword in header_text for keyword in section_keywords):
+            continue
+
+        for table in iter_section_tables(header):
+            parsed = parse_moves_from_table(table, source)
+            if parsed:
+                return parsed
+
+    return []
+
+
+def extract_moves(soup: BeautifulSoup) -> list:
+    """提取技能列表（升级 + 学习器）"""
+    levelup_moves = extract_moves_from_section(
+        soup,
+        ["可学会的招式", "可學會的招式", "可学会招式", "可學會招式"],
+        "升级"
+    )
+    machine_moves = extract_moves_from_section(
+        soup,
+        ["能使用的招式学习器", "能使用的招式學習器", "招式学习器", "招式學習器"],
+        "学习器"
+    )
+
+    return levelup_moves + machine_moves
 
 
 def extract_image_url(soup: BeautifulSoup, pokemon_number: str) -> str:
