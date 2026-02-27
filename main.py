@@ -849,6 +849,99 @@ def extract_moves(soup: BeautifulSoup) -> list:
     return levelup_moves + machine_moves
 
 
+def dedupe_moves_by_name(moves: list[dict]) -> list[dict]:
+    """按招式名去重，保留首次出现"""
+    deduped: list[dict] = []
+    seen_names: set[str] = set()
+
+    for move in moves:
+        name = re.sub(r"\s+", "", str(move.get("name", "")))
+        if not name or name in seen_names:
+            continue
+        seen_names.add(name)
+        deduped.append(move)
+
+    return deduped
+
+
+def build_type_canonical_map(name_mapping: dict[str, str] | None = None) -> dict[str, str]:
+    """构建属性简称/全称到规范全称的映射"""
+    canonical: dict[str, str] = {t: t for t in TYPE_ORDER}
+
+    for short_name, full_name in TYPE_ICON_ALIASES.items():
+        canonical[short_name] = full_name
+        canonical[full_name] = full_name
+
+    for full_name, short_name in (name_mapping or {}).items():
+        canonical[full_name] = full_name
+        canonical[short_name] = full_name
+
+    return canonical
+
+
+def normalize_type_for_match(type_name: str, canonical_map: dict[str, str]) -> str:
+    """规范化属性文本用于本系匹配"""
+    normalized = str(type_name or "").strip()
+    normalized = normalized.replace("屬性", "").replace("属性", "").replace("屬", "")
+    return canonical_map.get(normalized, normalized)
+
+
+def build_form_move_tables(
+    moves: list[dict],
+    type_effectiveness_forms: list[dict],
+    name_mapping: dict[str, str] | None = None,
+    fallback_types: list[str] | None = None,
+) -> list[dict]:
+    """按形态构建技能池汇总（物理/特殊本系与非本系、变化）"""
+    row_labels = ["物理本系", "物理非本系", "特殊本系", "特殊非本系", "变化"]
+    canonical_map = build_type_canonical_map(name_mapping)
+
+    forms = type_effectiveness_forms or [{"form_name": "默认", "types": fallback_types or []}]
+    form_tables: list[dict] = []
+
+    for form in forms:
+        form_types = form.get("types") or []
+        form_type_set = {
+            normalize_type_for_match(t, canonical_map)
+            for t in form_types
+            if str(t).strip()
+        }
+
+        bucket_map: dict[str, list[str]] = {label: [] for label in row_labels}
+
+        for move in moves:
+            name = str(move.get("name", "")).strip()
+            if not name:
+                continue
+
+            category = str(move.get("category", "")).replace("變化", "变化").strip()
+            power = str(move.get("power", "")).strip()
+            move_type_norm = normalize_type_for_match(str(move.get("type", "")), canonical_map)
+
+            if category == "变化":
+                bucket_map["变化"].append(name)
+                continue
+
+            if category not in ["物理", "特殊"]:
+                continue
+
+            is_stab = bool(move_type_norm) and move_type_norm in form_type_set
+            bucket_key = f"{category}{'本系' if is_stab else '非本系'}"
+
+            if power.isdigit():
+                bucket_map[bucket_key].append(f"{name}{power}")
+            else:
+                bucket_map[bucket_key].append(name)
+
+        form_tables.append({
+            "form_name": form.get("form_name", "默认"),
+            "types": form_types,
+            "rows": [{"label": label, "moves": bucket_map[label]} for label in row_labels],
+        })
+
+    return form_tables
+
+
 def extract_image_url(soup: BeautifulSoup, pokemon_number: str) -> str:
     """提取 Pokemon 图片 URL"""
     # 方法1: 查找包含 Pokemon 编号的图片 (如 001Bulbasaur.png)
@@ -1007,7 +1100,13 @@ def main():
                 "attack_weak": []
             }]
 
-        moves = extract_moves(soup)
+        moves = dedupe_moves_by_name(extract_moves(soup))
+        form_move_tables = build_form_move_tables(
+            moves,
+            type_effectiveness_forms,
+            name_mapping=name_mapping,
+            fallback_types=types,
+        )
         image_url = extract_image_url(soup, number)
 
         # 5. 下载图片
@@ -1028,6 +1127,7 @@ def main():
             "stats_tables": stats_tables,
             "effectiveness": effectiveness,
             "type_effectiveness_forms": type_effectiveness_forms,
+            "form_move_tables": form_move_tables,
             "type_icons": type_icons,
             "moves": moves,
             "image_path": image_path

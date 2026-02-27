@@ -360,6 +360,26 @@
             {% endfor %}
         </div>
 
+        <div class="info-section">
+            <h2>形态技能池汇总</h2>
+            {% for form in data.form_move_tables %}
+            <h3 class="form-title">{{ form.form_name }}</h3>
+            <div class="table-frame">
+                <table class="attack-table">
+                    <tr>
+                        <td class="pokemon-types">{{ form.types | join('+') if form.types else '—' }}</td>
+                        <td class="attack-title">技能池</td>
+                    </tr>
+                    {% for row in form.rows %}
+                    <tr>
+                        <td class="row-label">{{ row.label }}</td>
+                        <td>{{ row.moves | join('，') if row.moves else '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% endfor %}
+        </div>
 
         <div class="info-section">
             <h2>技能列表</h2>
