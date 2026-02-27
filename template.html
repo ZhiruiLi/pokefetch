@@ -4,6 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{ data.number }} {{ data.name }}</title>
+    <link rel="stylesheet" href="wiki_site_styles.css">
     <style>
         * {
             margin: 0;
@@ -94,39 +95,83 @@
             font-weight: 700;
         }
         .form-title {
-            margin: 10px 0 8px;
-            font-size: 1.1em;
-            color: #333;
+            margin: 12px 0 10px;
+            padding-bottom: 6px;
+            border-bottom: 2px solid #3f79ff;
+            font-size: 1.2em;
+            font-weight: 700;
+            color: #1f4ed8;
         }
         .stats-table {
             width: 100%;
-            border-collapse: collapse;
-            border: 1px solid #d9d9d9;
-            border-radius: 8px;
+            border-collapse: separate;
+            border-spacing: 0;
+            border: 1px solid #7fbe5f;
+            border-radius: 14px;
             overflow: hidden;
             margin-top: 8px;
+            table-layout: fixed;
+            background: #c8ffa3;
         }
         .stats-table th,
         .stats-table td {
-            border: 1px solid #e6e6e6;
-            padding: 10px 12px;
+            border-right: 1px solid #8ccb70;
+            border-bottom: 1px solid #8ccb70;
+            padding: 8px 10px;
             text-align: center;
-            color: #222;
-            background: #fff;
+            color: #111;
+            font-weight: 700;
+            background: transparent;
+        }
+        .stats-table tr > *:last-child {
+            border-right: none;
+        }
+        .stats-table tbody tr:last-child td {
+            border-bottom: none;
         }
         .stats-table thead th {
-            background: #f5f5f5;
+            background: #c8ffa3;
+            font-weight: 800;
+        }
+        .stats-table .head-sub {
+            font-size: 0.92em;
             font-weight: 700;
         }
-        .stats-table td:first-child {
+        .stats-table .name-cell {
             text-align: left;
-            font-weight: 700;
-            width: 140px;
+            font-weight: 800;
+            font-size: 1.1em;
+            width: 180px;
+            white-space: nowrap;
+        }
+        .stats-table .name-wrap {
+            display: flex;
+            justify-content: space-between;
+            gap: 8px;
+        }
+        .stats-table .bar-cell {
+            width: 240px;
+            background: transparent;
+        }
+        .stats-table .bar-track {
+            height: 30px;
+            background: transparent;
+            display: flex;
+            align-items: center;
+        }
+        .stats-table .bar-fill {
+            height: 28px;
         }
         .stats-table .total-row td {
-            background: #fffdf2;
-            font-weight: 700;
+            background: #c8ffa3;
+            font-weight: 800;
         }
+        .stats-table tr.bgl-HP td { background: #a9c789; }
+        .stats-table tr.bgl-攻击 td { background: #f0dd95; }
+        .stats-table tr.bgl-防御 td { background: #eac48a; }
+        .stats-table tr.bgl-特攻 td { background: #b9e1e8; }
+        .stats-table tr.bgl-特防 td { background: #a9c3e7; }
+        .stats-table tr.bgl-速度 td { background: #c8b4e8; }
         .moves-table {
             width: 100%;
             border-collapse: collapse;
@@ -220,28 +265,44 @@
         <div class="info-section">
             <h2>种族值</h2>
             {% for form in data.stats_tables %}
-            <h3 class="form-title">{{ form.form_name }}</h3>
+            <h3 class="form-title">{{ '一般' if form.form_name == '默认' else form.form_name }}</h3>
             <table class="stats-table">
                 <thead>
                     <tr>
-                        <th>能力值</th>
-                        <th>种族值</th>
+                        <th colspan="2" rowspan="2">种族值</th>
+                        <th colspan="2">能力值范围<br><span class="head-sub">基础点数 · GO力量 · 奋斗等级</span></th>
+                    </tr>
+                    <tr>
                         <th>Lv.50</th>
                         <th>Lv.100</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for row in form.rows %}
-                    <tr>
-                        <td>{{ row.label }}</td>
-                        <td>{{ row.base }}</td>
+                    <tr class="{{ row.row_class }}">
+                        <td class="name-cell">
+                            <div class="name-wrap">
+                                <span>{{ row.label }}：</span>
+                                <span>{{ row.base }}</span>
+                            </div>
+                        </td>
+                        <td class="bar-cell">
+                            <div class="bar-track">
+                                <div class="bar-fill {{ row.bar_bd_class }} {{ row.bar_bg_class }} bw-1" style="width: calc(100% * {{ row.base_int }}/255);"></div>
+                            </div>
+                        </td>
                         <td>{{ row.lv50 }}</td>
                         <td>{{ row.lv100 }}</td>
                     </tr>
                     {% endfor %}
                     <tr class="total-row">
-                        <td>总和</td>
-                        <td>{{ form.total }}</td>
+                        <td class="name-cell">
+                            <div class="name-wrap">
+                                <span>总和：</span>
+                                <span>{{ form.total }}</span>
+                            </div>
+                        </td>
+                        <td></td>
                         <td>—</td>
                         <td>—</td>
                     </tr>
