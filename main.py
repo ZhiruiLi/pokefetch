@@ -8,6 +8,7 @@ import argparse
 import hashlib
 import os
 import re
+import shutil
 import sys
 from pathlib import Path
 from urllib.parse import quote, urljoin
@@ -27,11 +28,21 @@ CACHE_ENABLED = True
 REFRESH_CACHE = False
 NAME_MAPPING_FILE = Path("name_mapping.txt")
 TEMPLATE_FILE = Path(__file__).with_name("template.html")
+SITE_STYLES_FILE = Path(__file__).with_name("wiki_site_styles.css")
 
 TYPE_ORDER = [
     "一般", "格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
     "火", "水", "草", "电", "超能力", "冰", "龙", "恶", "妖精"
 ]
+
+STAT_ROW_CLASS_MAP = {
+    "hp": {"row": "bgl-HP", "bar_bg": "bg-HP", "bar_bd": "bd-HP"},
+    "attack": {"row": "bgl-攻击", "bar_bg": "bg-攻击", "bar_bd": "bd-攻击"},
+    "defense": {"row": "bgl-防御", "bar_bg": "bg-防御", "bar_bd": "bd-防御"},
+    "sp_attack": {"row": "bgl-特攻", "bar_bg": "bg-特攻", "bar_bd": "bd-特攻"},
+    "sp_defense": {"row": "bgl-特防", "bar_bg": "bg-特防", "bar_bd": "bd-特防"},
+    "speed": {"row": "bgl-速度", "bar_bg": "bg-速度", "bar_bd": "bd-速度"},
+}
 
 # 最新世代可用的属性相克关系（第六世代起规则一致）
 ATTACK_TYPE_CHART = {
@@ -300,10 +311,16 @@ def parse_stats_table(table: BeautifulSoup, form_name: str) -> dict | None:
         lv50 = re.sub(r"\s+", " ", lv50)
         lv100 = re.sub(r"\s+", " ", lv100)
 
+        base_int = int(base) if str(base).isdigit() else 0
+        stat_style = STAT_ROW_CLASS_MAP.get(stat_key, {})
         rows_data.append({
             "key": stat_key,
             "label": label,
             "base": base or "?",
+            "base_int": base_int,
+            "row_class": stat_style.get("row", ""),
+            "bar_bg_class": stat_style.get("bar_bg", ""),
+            "bar_bd_class": stat_style.get("bar_bd", ""),
             "lv50": lv50 or "—",
             "lv100": lv100 or "—"
         })
@@ -774,6 +791,11 @@ def generate_html(data: dict, output_dir: Path) -> None:
 
     output_file = output_dir / "index.html"
     output_file.write_text(html_content, encoding="utf-8")
+
+    # 复制原站样式到输出目录，尽量复刻视觉效果
+    if SITE_STYLES_FILE.exists():
+        shutil.copy2(SITE_STYLES_FILE, output_dir / "wiki_site_styles.css")
+
     print(f"网页已生成: {output_file}")
 
 
@@ -832,12 +854,12 @@ def main():
             stats_tables = [{
                 "form_name": "默认",
                 "rows": [
-                    {"key": "hp", "label": "HP", "base": stats.get("hp", "?"), "lv50": "—", "lv100": "—"},
-                    {"key": "attack", "label": "攻击", "base": stats.get("attack", "?"), "lv50": "—", "lv100": "—"},
-                    {"key": "defense", "label": "防御", "base": stats.get("defense", "?"), "lv50": "—", "lv100": "—"},
-                    {"key": "sp_attack", "label": "特攻", "base": stats.get("sp_attack", "?"), "lv50": "—", "lv100": "—"},
-                    {"key": "sp_defense", "label": "特防", "base": stats.get("sp_defense", "?"), "lv50": "—", "lv100": "—"},
-                    {"key": "speed", "label": "速度", "base": stats.get("speed", "?"), "lv50": "—", "lv100": "—"}
+                    {"key": "hp", "label": "HP", "base": stats.get("hp", "?"), "base_int": int(stats.get("hp", 0)) if str(stats.get("hp", "")).isdigit() else 0, "row_class": "bgl-HP", "bar_bg_class": "bg-HP", "bar_bd_class": "bd-HP", "lv50": "—", "lv100": "—"},
+                    {"key": "attack", "label": "攻击", "base": stats.get("attack", "?"), "base_int": int(stats.get("attack", 0)) if str(stats.get("attack", "")).isdigit() else 0, "row_class": "bgl-攻击", "bar_bg_class": "bg-攻击", "bar_bd_class": "bd-攻击", "lv50": "—", "lv100": "—"},
+                    {"key": "defense", "label": "防御", "base": stats.get("defense", "?"), "base_int": int(stats.get("defense", 0)) if str(stats.get("defense", "")).isdigit() else 0, "row_class": "bgl-防御", "bar_bg_class": "bg-防御", "bar_bd_class": "bd-防御", "lv50": "—", "lv100": "—"},
+                    {"key": "sp_attack", "label": "特攻", "base": stats.get("sp_attack", "?"), "base_int": int(stats.get("sp_attack", 0)) if str(stats.get("sp_attack", "")).isdigit() else 0, "row_class": "bgl-特攻", "bar_bg_class": "bg-特攻", "bar_bd_class": "bd-特攻", "lv50": "—", "lv100": "—"},
+                    {"key": "sp_defense", "label": "特防", "base": stats.get("sp_defense", "?"), "base_int": int(stats.get("sp_defense", 0)) if str(stats.get("sp_defense", "")).isdigit() else 0, "row_class": "bgl-特防", "bar_bg_class": "bg-特防", "bar_bd_class": "bd-特防", "lv50": "—", "lv100": "—"},
+                    {"key": "speed", "label": "速度", "base": stats.get("speed", "?"), "base_int": int(stats.get("speed", 0)) if str(stats.get("speed", "")).isdigit() else 0, "row_class": "bgl-速度", "bar_bg_class": "bg-速度", "bar_bd_class": "bd-速度", "lv50": "—", "lv100": "—"}
                 ],
                 "total": "?"
             }]
