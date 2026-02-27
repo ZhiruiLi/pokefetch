@@ -73,6 +73,10 @@
             border-bottom: 2px solid #667eea;
         }
         .table-frame {
+            width: calc((160px * 2 / 3) + (100% - 160px) * 0.6);
+            max-width: 100%;
+            margin-left: auto;
+            margin-right: auto;
             border: 2px solid #000;
             border-radius: 8px;
             overflow: hidden;
@@ -85,6 +89,10 @@
             width: 100%;
             border-collapse: collapse;
             border: 0;
+        }
+        .attack-table tr > td:first-child,
+        .defense-table tr > td:first-child {
+            width: calc(160px * 2 / 3);
         }
         .attack-table td,
         .defense-table td {
@@ -111,7 +119,7 @@
         }
         .attack-table .row-label,
         .defense-table .row-label {
-            width: 160px;
+            width: calc(160px * 2 / 3);
             font-weight: 700;
         }
         .form-title {
