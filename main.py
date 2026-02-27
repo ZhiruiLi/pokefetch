@@ -29,6 +29,14 @@ REFRESH_CACHE = False
 NAME_MAPPING_FILE = Path("name_mapping.txt")
 TEMPLATE_FILE = Path(__file__).with_name("template.html")
 SITE_STYLES_FILE = Path(__file__).with_name("wiki_site_styles.css")
+ICONS_DIR = Path(__file__).with_name("icons")
+
+TYPE_ICON_ALIASES = {
+    "斗": "格斗",
+    "飞": "飞行",
+    "鬼": "幽灵",
+    "超": "超能力",
+}
 
 TYPE_ORDER = [
     "一般", "格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
@@ -147,6 +155,36 @@ def load_name_mapping(mapping_file: Path = NAME_MAPPING_FILE) -> dict[str, str]:
         return {}
 
     return mapping
+
+
+def normalize_icon_type_name(type_name: str) -> str:
+    """规范化图标文件名中的属性名"""
+    normalized = type_name.strip()
+    if normalized.lower().endswith("svg"):
+        normalized = normalized[:-3]
+    return normalized
+
+
+def build_type_icon_map() -> dict[str, str]:
+    """扫描 icons 目录并返回 属性名 -> 文件名 映射"""
+    icon_map: dict[str, str] = {}
+
+    if not ICONS_DIR.exists():
+        return icon_map
+
+    for icon_file in ICONS_DIR.glob("*.svg"):
+        key = normalize_icon_type_name(icon_file.stem)
+        if key:
+            icon_map[key] = icon_file.name
+
+    # 兼容简称/全称属性名
+    for short_name, full_name in TYPE_ICON_ALIASES.items():
+        if full_name in icon_map and short_name not in icon_map:
+            icon_map[short_name] = icon_map[full_name]
+        if short_name in icon_map and full_name not in icon_map:
+            icon_map[full_name] = icon_map[short_name]
+
+    return icon_map
 
 
 def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
@@ -796,6 +834,10 @@ def generate_html(data: dict, output_dir: Path) -> None:
     if SITE_STYLES_FILE.exists():
         shutil.copy2(SITE_STYLES_FILE, output_dir / "wiki_site_styles.css")
 
+    # 复制本地图标资源目录
+    if ICONS_DIR.exists():
+        shutil.copytree(ICONS_DIR, output_dir / "icons", dirs_exist_ok=True)
+
     print(f"网页已生成: {output_file}")
 
 
@@ -893,6 +935,7 @@ def main():
                 image_path = image_filename
 
         # 6. 整理数据
+        type_icons = build_type_icon_map()
         data = {
             "number": number,
             "name": name,
@@ -901,6 +944,7 @@ def main():
             "stats_tables": stats_tables,
             "effectiveness": effectiveness,
             "type_effectiveness_forms": type_effectiveness_forms,
+            "type_icons": type_icons,
             "moves": moves,
             "image_path": image_path
         }

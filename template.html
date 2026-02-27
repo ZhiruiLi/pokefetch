@@ -33,6 +33,20 @@
             font-size: 2.5em;
             color: #333;
             margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+        .name-type-icons {
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .type-icon {
+            width: 48px;
+            height: 48px;
+            object-fit: contain;
         }
         .header .number {
             font-size: 1.2em;
@@ -58,17 +72,23 @@
             padding-bottom: 10px;
             border-bottom: 2px solid #667eea;
         }
+        .table-frame {
+            border: 2px solid #000;
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        .table-frame + .table-frame {
+            margin-top: 8px;
+        }
         .attack-table,
         .defense-table {
             width: 100%;
             border-collapse: collapse;
-            border: 1px solid #d9d9d9;
-            border-radius: 8px;
-            overflow: hidden;
+            border: 0;
         }
         .attack-table td,
         .defense-table td {
-            border: 1px solid #e6e6e6;
+            border: 1px solid #000;
             padding: 10px 12px;
             color: #000;
             background: #fff;
@@ -206,7 +226,19 @@
     <div class="container">
         <div class="header">
             <div class="number">#{{ data.number }}</div>
-            <h1>{{ data.name }}</h1>
+            <h1>
+                <span>{{ data.name }}</span>
+                {% if data.type_icons and data.types %}
+                <span class="name-type-icons">
+                    {% for t in data.types %}
+                    {% set icon_file = data.type_icons.get(t) %}
+                    {% if icon_file %}
+                    <img class="type-icon" src="icons/{{ icon_file }}" alt="{{ t }}" title="{{ t }}">
+                    {% endif %}
+                    {% endfor %}
+                </span>
+                {% endif %}
+            </h1>
         </div>
 
         <div class="image-section">
@@ -237,39 +269,43 @@
                 {% set ns.resist_display = ns.resist_display + [t ~ '(4倍)'] %}
             {% endfor %}
 
-            <table class="attack-table">
-                <tr>
-                    <td class="pokemon-types">{{ form.types | join('+') }}</td>
-                    <td class="attack-title">进攻端（输出克制）</td>
-                </tr>
-                <tr>
-                    <td class="row-label">效果拔群{{ form.attack_strong | length }}</td>
-                    <td>{{ form.attack_strong | join('，') }}</td>
-                </tr>
-                <tr>
-                    <td class="row-label">效果不好{{ form.attack_weak | length }}</td>
-                    <td>{{ form.attack_weak | join('，') if form.attack_weak else '单一属性无' }}</td>
-                </tr>
-            </table>
+            <div class="table-frame">
+                <table class="attack-table">
+                    <tr>
+                        <td class="pokemon-types">{{ form.types | join('+') }}</td>
+                        <td class="attack-title">进攻端（输出克制）</td>
+                    </tr>
+                    <tr>
+                        <td class="row-label">效果拔群{{ form.attack_strong | length }}</td>
+                        <td>{{ form.attack_strong | join('，') }}</td>
+                    </tr>
+                    <tr>
+                        <td class="row-label">效果不好{{ form.attack_weak | length }}</td>
+                        <td>{{ form.attack_weak | join('，') if form.attack_weak else '单一属性无' }}</td>
+                    </tr>
+                </table>
+            </div>
 
-            <table class="defense-table" style="margin-top: 8px;">
-                <tr>
-                    <td class="pokemon-types">{{ form.types | join('+') }}</td>
-                    <td class="defense-title">防守端（抗性）</td>
-                </tr>
-                <tr>
-                    <td class="row-label">弱点{{ ns.weak_display | length }}</td>
-                    <td>{{ ns.weak_display | join('，') }}</td>
-                </tr>
-                <tr>
-                    <td class="row-label">抗性{{ ns.resist_display | length }}</td>
-                    <td>{{ ns.resist_display | join('，') }}</td>
-                </tr>
-                <tr>
-                    <td class="row-label">免疫{{ form.effectiveness.immune | length }}</td>
-                    <td>{{ form.effectiveness.immune | join('，') }}</td>
-                </tr>
-            </table>
+            <div class="table-frame">
+                <table class="defense-table">
+                    <tr>
+                        <td class="pokemon-types">{{ form.types | join('+') }}</td>
+                        <td class="defense-title">防守端（抗性）</td>
+                    </tr>
+                    <tr>
+                        <td class="row-label">弱点{{ ns.weak_display | length }}</td>
+                        <td>{{ ns.weak_display | join('，') }}</td>
+                    </tr>
+                    <tr>
+                        <td class="row-label">抗性{{ ns.resist_display | length }}</td>
+                        <td>{{ ns.resist_display | join('，') }}</td>
+                    </tr>
+                    <tr>
+                        <td class="row-label">免疫{{ form.effectiveness.immune | length }}</td>
+                        <td>{{ form.effectiveness.immune | join('，') }}</td>
+                    </tr>
+                </table>
+            </div>
             {% endfor %}
         </div>
 
