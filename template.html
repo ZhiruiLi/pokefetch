@@ -57,6 +57,7 @@
             padding-bottom: 10px;
             border-bottom: 2px solid #667eea;
         }
+        .attack-table,
         .defense-table {
             width: 100%;
             border-collapse: collapse;
@@ -64,6 +65,7 @@
             border-radius: 8px;
             overflow: hidden;
         }
+        .attack-table td,
         .defense-table td {
             border: 1px solid #e6e6e6;
             padding: 10px 12px;
@@ -71,8 +73,14 @@
             background: #fff;
             vertical-align: top;
         }
+        .attack-table .pokemon-types,
         .defense-table .pokemon-types {
             background: #fff7cc;
+            font-weight: 700;
+        }
+        .attack-table .attack-title {
+            background: #f2f2f2;
+            color: #d9534f;
             font-weight: 700;
         }
         .defense-table .defense-title {
@@ -80,6 +88,7 @@
             color: #7aa7d9;
             font-weight: 700;
         }
+        .attack-table .row-label,
         .defense-table .row-label {
             width: 160px;
             font-weight: 700;
@@ -164,7 +173,22 @@
                 {% set ns.resist_display = ns.resist_display + [t ~ '(4倍)'] %}
             {% endfor %}
 
-            <table class="defense-table">
+            <table class="attack-table">
+                <tr>
+                    <td class="pokemon-types">{{ form.types | join('+') }}</td>
+                    <td class="attack-title">进攻端（输出克制）</td>
+                </tr>
+                <tr>
+                    <td class="row-label">效果拔群{{ form.attack_strong | length }}</td>
+                    <td>{{ form.attack_strong | join('，') }}</td>
+                </tr>
+                <tr>
+                    <td class="row-label">效果不好{{ form.attack_weak | length }}</td>
+                    <td>{{ form.attack_weak | join('，') if form.attack_weak else '单一属性无' }}</td>
+                </tr>
+            </table>
+
+            <table class="defense-table" style="margin-top: 8px;">
                 <tr>
                     <td class="pokemon-types">{{ form.types | join('+') }}</td>
                     <td class="defense-title">防守端（抗性）</td>

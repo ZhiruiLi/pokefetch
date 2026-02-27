@@ -28,6 +28,64 @@ REFRESH_CACHE = False
 NAME_MAPPING_FILE = Path("name_mapping.txt")
 TEMPLATE_FILE = Path(__file__).with_name("template.html")
 
+TYPE_ORDER = [
+    "一般", "格斗", "飞行", "毒", "地面", "岩石", "虫", "幽灵", "钢",
+    "火", "水", "草", "电", "超能力", "冰", "龙", "恶", "妖精"
+]
+
+# 最新世代可用的属性相克关系（第六世代起规则一致）
+ATTACK_TYPE_CHART = {
+    "一般": {"岩石": 0.5, "幽灵": 0, "钢": 0.5},
+    "格斗": {"一般": 2, "飞行": 0.5, "毒": 0.5, "岩石": 2, "虫": 0.5, "幽灵": 0, "钢": 2, "超能力": 0.5, "冰": 2, "恶": 2, "妖精": 0.5},
+    "飞行": {"格斗": 2, "岩石": 0.5, "虫": 2, "钢": 0.5, "草": 2, "电": 0.5},
+    "毒": {"毒": 0.5, "地面": 0.5, "岩石": 0.5, "幽灵": 0.5, "钢": 0, "草": 2, "妖精": 2},
+    "地面": {"飞行": 0, "毒": 2, "岩石": 2, "虫": 0.5, "钢": 2, "火": 2, "草": 0.5, "电": 2},
+    "岩石": {"格斗": 0.5, "飞行": 2, "地面": 0.5, "虫": 2, "钢": 0.5, "火": 2, "冰": 2},
+    "虫": {"格斗": 0.5, "飞行": 0.5, "毒": 0.5, "幽灵": 0.5, "钢": 0.5, "火": 0.5, "草": 2, "超能力": 2, "恶": 2, "妖精": 0.5},
+    "幽灵": {"一般": 0, "幽灵": 2, "超能力": 2, "恶": 0.5},
+    "钢": {"岩石": 2, "钢": 0.5, "火": 0.5, "水": 0.5, "电": 0.5, "冰": 2, "妖精": 2},
+    "火": {"岩石": 0.5, "钢": 2, "火": 0.5, "水": 0.5, "草": 2, "冰": 2, "龙": 0.5, "虫": 2},
+    "水": {"地面": 2, "岩石": 2, "火": 2, "水": 0.5, "草": 0.5, "龙": 0.5},
+    "草": {"飞行": 0.5, "毒": 0.5, "地面": 2, "岩石": 2, "虫": 0.5, "钢": 0.5, "火": 0.5, "水": 2, "草": 0.5, "龙": 0.5},
+    "电": {"飞行": 2, "地面": 0, "水": 2, "草": 0.5, "电": 0.5, "龙": 0.5},
+    "超能力": {"格斗": 2, "毒": 2, "钢": 0.5, "超能力": 0.5, "恶": 0},
+    "冰": {"飞行": 2, "地面": 2, "钢": 0.5, "火": 0.5, "水": 0.5, "草": 2, "冰": 0.5, "龙": 2},
+    "龙": {"钢": 0.5, "龙": 2, "妖精": 0},
+    "恶": {"格斗": 0.5, "幽灵": 2, "超能力": 2, "恶": 0.5, "妖精": 0.5},
+    "妖精": {"格斗": 2, "毒": 0.5, "钢": 0.5, "火": 0.5, "龙": 2, "恶": 2}
+}
+
+
+def compute_attack_effectiveness(
+    form_types: list[str],
+    name_mapping: dict[str, str] | None = None
+) -> tuple[list[str], list[str]]:
+    """计算进攻端属性克制（效果拔群/效果不好）"""
+    valid_types = [t for t in form_types if t in ATTACK_TYPE_CHART]
+    if not valid_types:
+        return [], []
+
+    strong_list: list[str] = []
+    weak_list: list[str] = []
+
+    for defend_type in TYPE_ORDER:
+        multipliers = [ATTACK_TYPE_CHART[atk].get(defend_type, 1) for atk in valid_types]
+
+        # 任意一个属性克制即可算效果拔群（并集）
+        if any(m > 1 for m in multipliers):
+            mapped_name = name_mapping.get(defend_type, defend_type) if name_mapping else defend_type
+            strong_list.append(mapped_name)
+
+        # 仅当所有属性都效果不好（<1）才算效果不好（交集）
+        if all(m < 1 for m in multipliers):
+            mapped_name = name_mapping.get(defend_type, defend_type) if name_mapping else defend_type
+            # 所有属性都无效（=0）时标注
+            if all(m == 0 for m in multipliers):
+                mapped_name = f"{mapped_name}(无效)"
+            weak_list.append(mapped_name)
+
+    return strong_list, weak_list
+
 
 def fetch_page(url: str) -> BeautifulSoup:
     """获取页面并解析为 BeautifulSoup 对象（支持本地缓存）"""
@@ -356,13 +414,13 @@ def extract_type_effectiveness(
                 continue
 
             # 属性（前两列）
-            form_types: list[str] = []
+            raw_form_types: list[str] = []
             for cell in meta_cells[:2]:
                 type_text = cell.get_text(strip=True)
                 type_text = type_text.replace("屬性", "").replace("屬", "").replace("属性", "")
                 if type_text and type_text not in ["—", "-", "未知"]:
-                    form_types.append(type_text)
-            form_types = list(dict.fromkeys(form_types))
+                    raw_form_types.append(type_text)
+            raw_form_types = list(dict.fromkeys(raw_form_types))
 
             # 形态名（第3列，可能为空）
             raw_form_name = ""
@@ -403,19 +461,25 @@ def extract_type_effectiveness(
             for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
                 form_effectiveness[key] = list(dict.fromkeys(form_effectiveness[key]))
 
-            # 应用名称映射
+            # 计算进攻端克制
+            attack_strong, attack_weak = compute_attack_effectiveness(raw_form_types, name_mapping)
+
+            # 应用名称映射（防守端 + 展示属性）
+            display_form_types = raw_form_types
             if name_mapping:
-                form_types = [name_mapping.get(t, t) for t in form_types]
+                display_form_types = [name_mapping.get(t, t) for t in raw_form_types]
                 for key in ["weak", "weak_4x", "resist", "immune", "strong", "weak_attack"]:
                     form_effectiveness[key] = [name_mapping.get(t, t) for t in form_effectiveness[key]]
 
-            if not form_types and not any(form_effectiveness.values()):
+            if not display_form_types and not any(form_effectiveness.values()) and not attack_strong and not attack_weak:
                 continue
 
             forms.append({
                 "form_name": form_name,
-                "types": form_types,
+                "types": display_form_types,
                 "effectiveness": form_effectiveness,
+                "attack_strong": attack_strong,
+                "attack_weak": attack_weak,
                 "row_index": row_index
             })
 
@@ -436,7 +500,9 @@ def extract_type_effectiveness(
         {
             "form_name": f["form_name"],
             "types": f["types"],
-            "effectiveness": f["effectiveness"]
+            "effectiveness": f["effectiveness"],
+            "attack_strong": f.get("attack_strong", []),
+            "attack_weak": f.get("attack_weak", [])
         }
         for f in sorted_forms
     ]
@@ -620,7 +686,9 @@ def main():
             type_effectiveness_forms = [{
                 "form_name": "默认",
                 "types": types,
-                "effectiveness": effectiveness
+                "effectiveness": effectiveness,
+                "attack_strong": [],
+                "attack_weak": []
             }]
 
         moves = extract_moves(soup)
