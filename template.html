@@ -103,15 +103,14 @@
             color: #1f4ed8;
         }
         .stats-table {
-            width: 540px;
-            max-width: 100%;
+            width: auto;
             border-collapse: separate;
             border-spacing: 0;
             border: 1px solid #7fbe5f;
             border-radius: 14px;
             overflow: hidden;
             margin: 8px auto 0;
-            table-layout: fixed;
+            table-layout: auto;
             background: #c8ffa3;
         }
         .stats-table th,
@@ -139,7 +138,7 @@
             text-align: left;
             font-weight: 800;
             font-size: 1em;
-            width: 52px;
+            width: 88px;
             white-space: nowrap;
         }
         .stats-table .name-wrap {
@@ -159,6 +158,11 @@
         .stats-table .bar-cell {
             width: 132px;
             background: transparent;
+        }
+        .stats-table thead th:last-child,
+        .stats-table .range-cell {
+            width: 170px;
+            white-space: nowrap;
         }
         .stats-table .bar-track {
             height: 22px;
@@ -294,7 +298,7 @@
                                 <div class="bar-fill {{ row.bar_bd_class }} {{ row.bar_bg_class }} bw-1" style="width: calc(100% * {{ row.base_int }}/255);"></div>
                             </div>
                         </td>
-                        <td>{{ row.lv50 }}</td>
+                        <td class="range-cell">{{ row.lv50 }}</td>
                     </tr>
                     {% endfor %}
                     <tr class="total-row">
@@ -305,7 +309,7 @@
                             </div>
                         </td>
                         <td></td>
-                        <td>—</td>
+                        <td class="range-cell">—</td>
                     </tr>
                 </tbody>
             </table>
