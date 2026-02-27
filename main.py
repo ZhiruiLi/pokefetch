@@ -17,20 +17,37 @@ import requests
 from bs4 import BeautifulSoup
 from jinja2 import Template
 
+def get_app_dir() -> Path:
+    """返回应用目录（源码模式为脚本目录，EXE 模式为 exe 所在目录）"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+def get_bundle_dir() -> Path:
+    """返回打包资源目录（EXE 模式为 _MEIPASS，源码模式为脚本目录）"""
+    meipass = getattr(sys, "_MEIPASS", None)
+    if meipass:
+        return Path(meipass)
+    return Path(__file__).resolve().parent
+
+
 # 常量定义
 BASE_URL = "https://wiki.52poke.com"
 LIST_URL = f"{BASE_URL}/wiki/宝可梦列表（按全国图鉴编号）"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.0"
 }
+APP_DIR = get_app_dir()
+BUNDLE_DIR = get_bundle_dir()
 CACHE_DIR = Path(".cache/pages")
 CACHE_ENABLED = True
 REFRESH_CACHE = False
-NAME_MAPPING_FILE = Path("name_mapping.txt")
-IGNORE_SKILLS_FILE = Path("ignore_skills.txt")
-TEMPLATE_FILE = Path(__file__).with_name("template.html")
-SITE_STYLES_FILE = Path(__file__).with_name("wiki_site_styles.css")
-ICONS_DIR = Path(__file__).with_name("icons")
+NAME_MAPPING_FILE = APP_DIR / "name_mapping.txt"
+IGNORE_SKILLS_FILE = APP_DIR / "ignore_skills.txt"
+TEMPLATE_FILE = BUNDLE_DIR / "template.html"
+SITE_STYLES_FILE = BUNDLE_DIR / "wiki_site_styles.css"
+ICONS_DIR = BUNDLE_DIR / "icons"
 
 TYPE_ICON_ALIASES = {
     "斗": "格斗",

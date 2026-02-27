@@ -17,3 +17,5 @@ wheels/
 
 out/
 demo*/
+exe_out/
+*.spec

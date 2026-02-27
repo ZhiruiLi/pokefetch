@@ -1,4 +1,4 @@
-# Pokemon PPT Helper
+# Pokefetch
 
 一个用于辅助制作 Pokemon 相关 PPT 的小工具：
 - 从 [wiki.52poke.com](https://wiki.52poke.com/) 抓取指定宝可梦信息
@@ -26,6 +26,38 @@
 ```bash
 uv sync
 ```
+
+## 构建 EXE（Windows）
+
+项目已提供打包脚本：`build_exe.bat`
+
+```bat
+build_exe.bat
+```
+
+打包完成后可执行文件位于：
+
+- `dist/pokefetch.exe`
+
+`dist/` 中还会同步可编辑配置文件：
+
+- `dist/name_mapping.txt`
+- `dist/ignore_skills.txt`
+
+如需先清理旧产物再打包，可使用：
+
+```bat
+release_exe.bat
+```
+
+使用示例：
+
+```bat
+pokefetch.exe 0003
+pokefetch.exe 妙蛙花 --output-dir out
+```
+
+> 说明：EXE 可独立运行（无需本机 Python 环境），但抓取数据时仍需要网络连接。
 
 ## 使用方法
 
