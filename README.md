@@ -100,3 +100,8 @@ out/
 
 - 本工具依赖目标站点页面结构，若站点改版可能需要调整解析逻辑
 - 首次抓取或未命中缓存时会进行网络请求
+
+## 鸣谢
+
+- 数据源：https://wiki.52poke.com/
+- icon 源：https://tw.portal-pokemon.com/game/type-chart/
