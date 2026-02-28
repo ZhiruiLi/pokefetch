@@ -239,32 +239,55 @@
             <div class="number">#{{ data.number }}</div>
             <h1>
                 <span>{{ data.name }}</span>
-                {% if data.type_icons and data.types %}
-                <span class="name-type-icons">
-                    {% for t in data.types %}
-                    {% set icon_file = data.type_icons.get(t) %}
-                    {% if icon_file %}
-                    <img class="type-icon" src="icons/{{ icon_file }}" alt="{{ t }}" title="{{ t }}">
-                    {% endif %}
-                    {% endfor %}
-                </span>
-                {% endif %}
             </h1>
         </div>
 
-        <div class="image-section">
-            {% if data.image_path %}
-            <img src="{{ data.image_path }}" alt="{{ data.name }}">
-            {% else %}
-            <p>暂无图片</p>
-            {% endif %}
+        {% if data.form_ability_tables %}
+        <div class="info-section">
+            <h2>形态特性</h2>
+            {% for form in data.form_ability_tables %}
+            <h3 class="form-title">{{ form.form_name }}</h3>
+            <div class="image-section">
+                {% if form.image_path %}
+                <img src="{{ form.image_path }}" alt="{{ form.form_name }}">
+                {% else %}
+                <p>暂无图片</p>
+                {% endif %}
+            </div>
+            <div class="table-frame">
+                <table class="defense-table">
+                    <tr>
+                        <td class="defense-title">特性名</td>
+                        <td class="defense-title">对战中</td>
+                    </tr>
+                    {% for row in form.rows %}
+                    <tr>
+                        <td class="row-label">{{ row.name }}</td>
+                        <td>{{ row.battle_effect }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% endfor %}
         </div>
+        {% endif %}
 
         <div class="info-section">
             <h2>属性与属性克制</h2>
 
             {% for form in data.type_effectiveness_forms %}
             <h3 class="form-title">{{ form.form_name }}</h3>
+
+            {% if data.type_icons and form.types %}
+            <div class="name-type-icons" style="justify-content: center; margin-bottom: 12px;">
+                {% for t in form.types %}
+                {% set icon_file = data.type_icons.get(t) %}
+                {% if icon_file %}
+                <img class="type-icon" src="icons/{{ icon_file }}" alt="{{ t }}" title="{{ t }}">
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
 
             {% set ns = namespace(weak_display=[], resist_display=[]) %}
             {% for t in form.effectiveness.weak %}
@@ -319,29 +342,6 @@
             </div>
             {% endfor %}
         </div>
-
-        {% if data.form_ability_tables %}
-        <div class="info-section">
-            <h2>形态特性</h2>
-            {% for form in data.form_ability_tables %}
-            <h3 class="form-title">{{ form.form_name }}</h3>
-            <div class="table-frame">
-                <table class="defense-table">
-                    <tr>
-                        <td class="defense-title">特性名</td>
-                        <td class="defense-title">对战中</td>
-                    </tr>
-                    {% for row in form.rows %}
-                    <tr>
-                        <td class="row-label">{{ row.name }}</td>
-                        <td>{{ row.battle_effect }}</td>
-                    </tr>
-                    {% endfor %}
-                </table>
-            </div>
-            {% endfor %}
-        </div>
-        {% endif %}
 
         <div class="info-section">
             <h2>种族值</h2>

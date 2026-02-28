@@ -770,6 +770,174 @@ def infer_form_name_from_image_src(image_src: str, pokemon_name: str) -> str:
     return f"{pokemon_name}（{suffix}）"
 
 
+def normalize_form_name_for_match(form_name: str, pokemon_name: str) -> str:
+    """将形态名归一化为可匹配键"""
+    raw = re.sub(r"\s+", "", form_name or "")
+    if not raw or raw in {"默认", "一般", pokemon_name}:
+        return "default"
+
+    normalized = raw.replace("（", "(").replace("）", ")").replace("超級", "超级")
+    lower = normalized.lower().replace("_", "-").replace(" ", "-")
+
+    if "超级" in normalized or "mega" in lower:
+        if re.search(r"[xXＸ]", normalized) or "mega-x" in lower:
+            return "mega-x"
+        if re.search(r"[yYＹ]", normalized) or "mega-y" in lower:
+            return "mega-y"
+        return "mega"
+
+    if "超极巨化" in normalized or "超極巨化" in normalized or "gigantamax" in lower or "gmax" in lower:
+        return "gigantamax"
+    if "阿罗拉" in normalized or "阿羅拉" in normalized or "alola" in lower:
+        return "alola"
+    if "伽勒尔" in normalized or "伽勒爾" in normalized or "galar" in lower:
+        return "galar"
+    if "洗翠" in normalized or "hisui" in lower:
+        return "hisui"
+    if "帕底亚" in normalized or "帕底亞" in normalized or "paldea" in lower:
+        return "paldea"
+
+    cleaned = normalized.replace(pokemon_name, "")
+    cleaned = cleaned.replace("形态", "").replace("形態", "")
+    cleaned = re.sub(r"[()（）·・_\-]+", "", cleaned)
+    cleaned = cleaned.strip()
+    return cleaned.lower() if cleaned else "default"
+
+
+def extract_form_images(soup: BeautifulSoup, pokemon_name: str) -> list[dict]:
+    """按形态提取主图 URL"""
+    form_rows = [
+        tr for tr in soup.find_all("tr")
+        if any(re.fullmatch(r"form\d+", cls or "") for cls in tr.get("class", []))
+    ]
+
+    form_images: list[dict] = []
+    seen_form_keys: set[str] = set()
+
+    for row in form_rows:
+        image_src = next(
+            (img.get("src", "") for img in row.find_all("img") if "300px-" in (img.get("src", "") or "")),
+            ""
+        )
+        if not image_src:
+            continue
+
+        form_name = infer_form_name_from_image_src(image_src, pokemon_name)
+        form_key = normalize_form_name_for_match(form_name, pokemon_name)
+        if form_key in seen_form_keys:
+            continue
+        seen_form_keys.add(form_key)
+
+        if image_src.startswith("//"):
+            image_src = "https:" + image_src
+
+        form_images.append({
+            "form_name": form_name,
+            "form_key": form_key,
+            "image_url": image_src,
+            "image_path": "",
+        })
+
+    return form_images
+
+
+def make_form_image_filename(number: str, pokemon_name: str, form_key: str) -> str:
+    """生成按形态区分的图片文件名"""
+    safe_key = re.sub(r"[^0-9a-zA-Z\u4e00-\u9fff_-]+", "-", form_key).strip("-")
+    if not safe_key:
+        safe_key = "default"
+    return f"{number}{pokemon_name}-{safe_key}.png"
+
+
+def assign_form_images_to_effectiveness_forms(
+    type_effectiveness_forms: list[dict],
+    form_images: list[dict],
+    pokemon_name: str,
+) -> None:
+    """将已下载的形态图片映射到属性相性形态数据"""
+    if not type_effectiveness_forms:
+        return
+
+    image_path_by_name = {
+        item.get("form_name", ""): item.get("image_path", "")
+        for item in form_images
+        if item.get("image_path")
+    }
+    image_path_by_key = {
+        item.get("form_key", ""): item.get("image_path", "")
+        for item in form_images
+        if item.get("image_path")
+    }
+
+    used_paths: set[str] = set()
+    unmatched_forms: list[dict] = []
+
+    for form in type_effectiveness_forms:
+        form_name = form.get("form_name", "默认")
+        form_key = normalize_form_name_for_match(form_name, pokemon_name)
+
+        image_path = image_path_by_name.get(form_name) or image_path_by_key.get(form_key, "")
+        if image_path:
+            used_paths.add(image_path)
+        else:
+            unmatched_forms.append(form)
+
+        form["image_path"] = image_path
+
+    remaining_paths = [
+        item["image_path"]
+        for item in form_images
+        if item.get("image_path") and item["image_path"] not in used_paths
+    ]
+
+    for form in unmatched_forms:
+        if not remaining_paths:
+            break
+        form["image_path"] = remaining_paths.pop(0)
+
+
+def assign_form_images_to_ability_tables(
+    form_ability_tables: list[dict],
+    form_images: list[dict],
+    pokemon_name: str,
+) -> None:
+    """将已下载的形态图片映射到形态特性表"""
+    if not form_ability_tables:
+        return
+
+    image_path_by_key = {
+        item.get("form_key", ""): item.get("image_path", "")
+        for item in form_images
+        if item.get("image_path")
+    }
+
+    used_paths: set[str] = set()
+    unmatched_forms: list[dict] = []
+
+    for form in form_ability_tables:
+        form_name = form.get("form_name", "默认")
+        form_key = normalize_form_name_for_match(form_name, pokemon_name)
+        image_path = image_path_by_key.get(form_key, "")
+
+        if image_path:
+            used_paths.add(image_path)
+        else:
+            unmatched_forms.append(form)
+
+        form["image_path"] = image_path
+
+    remaining_paths = [
+        item["image_path"]
+        for item in form_images
+        if item.get("image_path") and item["image_path"] not in used_paths
+    ]
+
+    for form in unmatched_forms:
+        if not remaining_paths:
+            break
+        form["image_path"] = remaining_paths.pop(0)
+
+
 def extract_ability_battle_effect(ability_url: str) -> str:
     """提取特性页面“对战中”章节文本"""
     try:
@@ -1332,15 +1500,42 @@ def main():
             fallback_types=types,
             ignored_skills=ignored_skills,
         )
-        image_url = extract_image_url(soup, number)
 
-        # 5. 下载图片
-        image_path = ""
-        if image_url:
-            image_filename = f"{number}{name}.png"
+        # 5. 下载按形态区分的图片
+        form_images = extract_form_images(soup, name)
+        if not form_images:
+            fallback_image_url = extract_image_url(soup, number)
+            if fallback_image_url:
+                form_images = [{
+                    "form_name": name,
+                    "form_key": "default",
+                    "image_url": fallback_image_url,
+                    "image_path": "",
+                }]
+
+        for form_img in form_images:
+            image_url = form_img.get("image_url", "")
+            if not image_url:
+                continue
+
+            image_filename = make_form_image_filename(number, name, form_img.get("form_key", "default"))
             image_save_path = output_dir / image_filename
             if download_image(image_url, image_save_path):
-                image_path = image_filename
+                form_img["image_path"] = image_filename
+
+        assign_form_images_to_effectiveness_forms(type_effectiveness_forms, form_images, name)
+        assign_form_images_to_ability_tables(form_ability_tables, form_images, name)
+
+        image_path = next(
+            (
+                f.get("image_path", "")
+                for f in type_effectiveness_forms
+                if normalize_form_name_for_match(f.get("form_name", "默认"), name) == "default" and f.get("image_path")
+            ),
+            "",
+        )
+        if not image_path:
+            image_path = next((f.get("image_path", "") for f in type_effectiveness_forms if f.get("image_path")), "")
 
         # 6. 整理数据
         type_icons = build_type_icon_map()
@@ -1352,6 +1547,7 @@ def main():
             "stats_tables": stats_tables,
             "effectiveness": effectiveness,
             "type_effectiveness_forms": type_effectiveness_forms,
+            "form_images": form_images,
             "form_ability_tables": form_ability_tables,
             "form_move_tables": form_move_tables,
             "type_icons": type_icons,
