@@ -731,6 +731,173 @@ def extract_type_effectiveness(
     return result
 
 
+def is_ability_page_link(href: str) -> bool:
+    """判断链接是否指向特性详情页"""
+    return "（特性）" in href or "%EF%BC%88%E7%89%B9%E6%80%A7%EF%BC%89" in href
+
+
+def infer_form_name_from_image_src(image_src: str, pokemon_name: str) -> str:
+    """根据形态主图文件名推断形态名称"""
+    raw = (image_src or "").split("?")[0]
+    filename = Path(raw).name
+    if filename.startswith("300px-"):
+        filename = filename[len("300px-"):]
+
+    stem = Path(filename).stem
+    if "-" not in stem:
+        return pokemon_name
+
+    suffix = stem.split("-", 1)[1].lower()
+    normalized_suffix = suffix.replace("_", "-").replace(" ", "-")
+
+    if normalized_suffix.startswith("mega-x"):
+        return f"超级{pokemon_name}X"
+    if normalized_suffix.startswith("mega-y"):
+        return f"超级{pokemon_name}Y"
+    if normalized_suffix.startswith("mega"):
+        return f"超级{pokemon_name}"
+    if suffix.startswith("gigantamax") or suffix.startswith("gmax"):
+        return f"超极巨化{pokemon_name}"
+    if suffix.startswith("alola"):
+        return f"阿罗拉{pokemon_name}"
+    if suffix.startswith("galar"):
+        return f"伽勒尔{pokemon_name}"
+    if suffix.startswith("hisui"):
+        return f"洗翠{pokemon_name}"
+    if suffix.startswith("paldea"):
+        return f"帕底亚{pokemon_name}"
+
+    return f"{pokemon_name}（{suffix}）"
+
+
+def extract_ability_battle_effect(ability_url: str) -> str:
+    """提取特性页面“对战中”章节文本"""
+    try:
+        ability_soup = fetch_page(ability_url)
+    except Exception as e:
+        print(f"读取特性详情失败: {ability_url} ({e})")
+        return "—"
+
+    header = None
+    for h in ability_soup.find_all(["h2", "h3", "h4"]):
+        h_text = h.get_text(" ", strip=True)
+        if "对战中" in h_text or "對戰中" in h_text:
+            header = h
+            break
+
+    if not header:
+        return "—"
+
+    lines: list[str] = []
+    for node in header.next_elements:
+        if node is header:
+            continue
+
+        tag_name = getattr(node, "name", None)
+        if tag_name in ["h2", "h3", "h4"]:
+            break
+
+        if tag_name in ["p", "li"]:
+            text = node.get_text(" ", strip=True)
+            text = re.sub(r"\s+", " ", text)
+            if text and text not in lines:
+                lines.append(text)
+
+    return " ".join(lines) if lines else "—"
+
+
+def extract_form_ability_tables(soup: BeautifulSoup, pokemon_name: str) -> list[dict]:
+    """按形态提取特性并补充“对战中”说明"""
+    form_rows = [
+        tr for tr in soup.find_all("tr")
+        if any(re.fullmatch(r"form\d+", cls or "") for cls in tr.get("class", []))
+    ]
+
+    extracted_forms: list[dict] = []
+    seen_signatures: set[tuple[str, tuple[str, ...]]] = set()
+
+    for row in form_rows:
+        image_src = next(
+            (img.get("src", "") for img in row.find_all("img") if "300px-" in (img.get("src", "") or "")),
+            ""
+        )
+        if not image_src:
+            continue
+
+        form_name = infer_form_name_from_image_src(image_src, pokemon_name)
+
+        ability_links: list[tuple[str, str]] = []
+        seen_ability_names: set[str] = set()
+        for a in row.find_all("a", href=True):
+            href = a.get("href", "")
+            if not is_ability_page_link(href):
+                continue
+
+            ability_name = re.sub(r"\s+", "", a.get_text(" ", strip=True))
+            if not ability_name or ability_name in seen_ability_names:
+                continue
+
+            seen_ability_names.add(ability_name)
+            ability_links.append((ability_name, urljoin(BASE_URL, href)))
+
+        if not ability_links:
+            continue
+
+        signature = (form_name, tuple(name for name, _ in ability_links))
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+
+        extracted_forms.append({
+            "form_name": form_name,
+            "abilities": ability_links,
+        })
+
+    if not extracted_forms:
+        # 单形态兜底：尽量从首个信息框提取特性链接
+        infobox = soup.find("table", class_=re.compile("roundy"))
+        if infobox:
+            fallback_links: list[tuple[str, str]] = []
+            seen_names: set[str] = set()
+            for a in infobox.find_all("a", href=True):
+                href = a.get("href", "")
+                if not is_ability_page_link(href):
+                    continue
+                name = re.sub(r"\s+", "", a.get_text(" ", strip=True))
+                if not name or name in seen_names:
+                    continue
+                seen_names.add(name)
+                fallback_links.append((name, urljoin(BASE_URL, href)))
+
+            if fallback_links:
+                extracted_forms.append({
+                    "form_name": pokemon_name,
+                    "abilities": fallback_links,
+                })
+
+    effect_cache: dict[str, str] = {}
+    form_tables: list[dict] = []
+
+    for form in extracted_forms:
+        rows: list[dict] = []
+        for ability_name, ability_url in form["abilities"]:
+            if ability_url not in effect_cache:
+                effect_cache[ability_url] = extract_ability_battle_effect(ability_url)
+
+            rows.append({
+                "name": ability_name,
+                "battle_effect": effect_cache[ability_url],
+            })
+
+        if rows:
+            form_tables.append({
+                "form_name": form["form_name"],
+                "rows": rows,
+            })
+
+    return form_tables
+
+
 def normalize_move_header_text(text: str) -> str:
     """规范化招式表头文本（简繁统一）"""
     normalized = re.sub(r"\s+", "", text)
@@ -1154,6 +1321,8 @@ def main():
                 "attack_weak": []
             }]
 
+        form_ability_tables = extract_form_ability_tables(soup, name)
+
         moves = dedupe_moves_by_name(extract_moves(soup))
         ignored_skills = load_ignored_skills()
         form_move_tables = build_form_move_tables(
@@ -1183,6 +1352,7 @@ def main():
             "stats_tables": stats_tables,
             "effectiveness": effectiveness,
             "type_effectiveness_forms": type_effectiveness_forms,
+            "form_ability_tables": form_ability_tables,
             "form_move_tables": form_move_tables,
             "type_icons": type_icons,
             "moves": moves,

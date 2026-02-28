@@ -320,6 +320,29 @@
             {% endfor %}
         </div>
 
+        {% if data.form_ability_tables %}
+        <div class="info-section">
+            <h2>形态特性</h2>
+            {% for form in data.form_ability_tables %}
+            <h3 class="form-title">{{ form.form_name }}</h3>
+            <div class="table-frame">
+                <table class="defense-table">
+                    <tr>
+                        <td class="defense-title">特性名</td>
+                        <td class="defense-title">对战中</td>
+                    </tr>
+                    {% for row in form.rows %}
+                    <tr>
+                        <td class="row-label">{{ row.name }}</td>
+                        <td>{{ row.battle_effect }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+
         <div class="info-section">
             <h2>种族值</h2>
             {% for form in data.stats_tables %}
