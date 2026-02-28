@@ -50,6 +50,16 @@ build_exe.bat
 release_exe.bat
 ```
 
+`release_exe.bat` 会额外生成发布压缩包：
+
+- `dist/pokefetch.zip`
+
+压缩包内包含：
+
+- `pokefetch.exe`
+- `name_mapping.txt`
+- `ignore_skills.txt`
+
 使用示例：
 
 ```bat
