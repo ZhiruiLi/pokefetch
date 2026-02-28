@@ -852,7 +852,7 @@ def extract_moves_from_section(soup: BeautifulSoup, section_keywords: list[str],
 
 
 def extract_moves(soup: BeautifulSoup) -> list:
-    """提取技能列表（升级 + 学习器）"""
+    """提取技能列表（升级 + 学习器 + 蛋招式）"""
     levelup_moves = extract_moves_from_section(
         soup,
         ["可学会的招式", "可學會的招式", "可学会招式", "可學會招式"],
@@ -863,8 +863,13 @@ def extract_moves(soup: BeautifulSoup) -> list:
         ["能使用的招式学习器", "能使用的招式學習器", "招式学习器", "招式學習器"],
         "学习器"
     )
+    egg_moves = extract_moves_from_section(
+        soup,
+        ["蛋招式", "遗传招式", "遺傳招式", "可遗传招式", "可遺傳招式"],
+        "蛋招式"
+    )
 
-    return levelup_moves + machine_moves
+    return levelup_moves + machine_moves + egg_moves
 
 
 def dedupe_moves_by_name(moves: list[dict]) -> list[dict]:
