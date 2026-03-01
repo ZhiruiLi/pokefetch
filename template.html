@@ -258,11 +258,13 @@
                 <table class="defense-table">
                     <tr>
                         <td class="defense-title" style="color: #000;">特性名</td>
+                        <td class="defense-title" style="color: #000;">文字介绍</td>
                         <td class="defense-title" style="color: #000;">特性效果</td>
                     </tr>
                     {% for row in form.rows %}
                     <tr>
                         <td class="row-label">{{ row.name }}</td>
+                        <td>{{ row.intro }}</td>
                         <td>{{ row.battle_effect }}</td>
                     </tr>
                     {% endfor %}

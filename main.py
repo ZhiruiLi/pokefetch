@@ -1033,25 +1033,10 @@ def assign_stats_theme_classes(
         stats_form["table_theme_class"] = type_theme_by_key.get(form_key, fallback_theme)
 
 
-def extract_ability_battle_effect(ability_url: str) -> str:
-    """提取特性页面“对战中”章节文本"""
-    try:
-        ability_soup = fetch_page(ability_url)
-    except Exception as e:
-        print(f"读取特性详情失败: {ability_url} ({e})")
-        return "—"
-
-    header = None
-    for h in ability_soup.find_all(["h2", "h3", "h4"]):
-        h_text = h.get_text(" ", strip=True)
-        if "对战中" in h_text or "對戰中" in h_text:
-            header = h
-            break
-
-    if not header:
-        return "—"
-
+def extract_section_text_by_header(header: BeautifulSoup) -> str:
+    """提取某个标题节点之后到下一标题前的段落文本"""
     lines: list[str] = []
+
     for node in header.next_elements:
         if node is header:
             continue
@@ -1066,11 +1051,97 @@ def extract_ability_battle_effect(ability_url: str) -> str:
             if text and text not in lines:
                 lines.append(text)
 
-    return " ".join(lines) if lines else "—"
+    return " ".join(lines) if lines else ""
+
+
+def extract_ability_intro_from_table(ability_soup: BeautifulSoup) -> str:
+    """从特性页表格结构中提取“文字介绍”内容（兼容无标题段落页面）"""
+    markers = ["文字介绍", "文字介紹"]
+    stop_keywords = ["特性效果", "特性说明", "特性說明", "特性变更", "特性變更", "对战中", "對戰中"]
+
+    for marker_node in ability_soup.find_all(["b", "th", "td", "span"]):
+        marker_text = re.sub(r"\s+", "", marker_node.get_text(" ", strip=True))
+        if marker_text not in markers:
+            continue
+
+        row = marker_node.find_parent("tr")
+        if not row:
+            continue
+
+        # 同行内容优先
+        for cell in row.find_all(["td", "th"]):
+            cell_text = re.sub(r"\s+", " ", cell.get_text(" ", strip=True))
+            cleaned = cell_text.replace("文字介绍", "").replace("文字介紹", "").strip(" ：:")
+            if cleaned:
+                return cleaned
+
+        # 向下查找第一条有效描述
+        for next_row in row.find_next_siblings("tr"):
+            row_text = re.sub(r"\s+", " ", next_row.get_text(" ", strip=True))
+            if not row_text:
+                continue
+            if any(k in row_text for k in stop_keywords):
+                break
+
+            cleaned = row_text.replace("文字介绍", "").replace("文字介紹", "").strip(" ：:")
+            if cleaned:
+                return cleaned
+
+    return ""
+
+
+def extract_ability_details(ability_url: str) -> dict[str, str]:
+    """提取特性详情：文字介绍 + 特性效果（优先对战中）"""
+    try:
+        ability_soup = fetch_page(ability_url)
+    except Exception as e:
+        print(f"读取特性详情失败: {ability_url} ({e})")
+        return {"intro": "—", "battle_effect": "—"}
+
+    headers = ability_soup.find_all(["h2", "h3", "h4"])
+
+    def find_section_by_keywords(keywords: list[str]) -> str:
+        for h in headers:
+            h_text = h.get_text(" ", strip=True)
+            if any(k in h_text for k in keywords):
+                section_text = extract_section_text_by_header(h)
+                if section_text:
+                    return section_text
+        return ""
+
+    intro_text = find_section_by_keywords(["文字介绍", "文字介紹"])
+    if not intro_text:
+        intro_text = extract_ability_intro_from_table(ability_soup)
+
+    # 特性效果优先级：对战中 > 特性效果 > 第一节
+    battle_text = find_section_by_keywords(["对战中", "對戰中"])
+    if not battle_text:
+        battle_text = find_section_by_keywords(["特性效果"])
+
+    if not battle_text:
+        skip_keywords = ["目录", "目錄", "参考", "參考", "参见", "參見", "外部链接", "外部連結"]
+        for h in headers:
+            h_text = h.get_text(" ", strip=True)
+            if any(k in h_text for k in skip_keywords):
+                continue
+            section_text = extract_section_text_by_header(h)
+            if section_text:
+                battle_text = section_text
+                break
+
+    return {
+        "intro": intro_text or "—",
+        "battle_effect": battle_text or "—",
+    }
+
+
+def extract_ability_battle_effect(ability_url: str) -> str:
+    """兼容旧调用：提取特性效果文本"""
+    return extract_ability_details(ability_url).get("battle_effect", "—")
 
 
 def extract_form_ability_tables(soup: BeautifulSoup, pokemon_name: str) -> list[dict]:
-    """按形态提取特性并补充“对战中”说明"""
+    """按形态提取特性并补充“文字介绍/特性效果”说明"""
     form_rows = [
         tr for tr in soup.find_all("tr")
         if any(re.fullmatch(r"form\d+", cls or "") for cls in tr.get("class", []))
@@ -1146,18 +1217,20 @@ def extract_form_ability_tables(soup: BeautifulSoup, pokemon_name: str) -> list[
                     "abilities": fallback_links,
                 })
 
-    effect_cache: dict[str, str] = {}
+    detail_cache: dict[str, dict[str, str]] = {}
     form_tables: list[dict] = []
 
     for form in extracted_forms:
         rows: list[dict] = []
         for ability_name, ability_url in form["abilities"]:
-            if ability_url not in effect_cache:
-                effect_cache[ability_url] = extract_ability_battle_effect(ability_url)
+            if ability_url not in detail_cache:
+                detail_cache[ability_url] = extract_ability_details(ability_url)
 
+            details = detail_cache[ability_url]
             rows.append({
                 "name": ability_name,
-                "battle_effect": effect_cache[ability_url],
+                "intro": details.get("intro", "—"),
+                "battle_effect": details.get("battle_effect", "—"),
             })
 
         if rows:
