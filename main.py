@@ -1612,6 +1612,12 @@ def main():
         default="out",
         help="输出目录（默认: out）"
     )
+    parser.add_argument(
+        "-w",
+        "--open-web",
+        action="store_true",
+        help="生成后自动用系统默认浏览器打开网页"
+    )
 
     args = parser.parse_args()
 
@@ -1732,6 +1738,7 @@ def main():
         data = {
             "number": number,
             "name": name,
+            "detail_url": detail_url,
             "types": types,
             "stats": stats,
             "stats_tables": stats_tables,
@@ -1748,7 +1755,8 @@ def main():
         # 7. 生成网页
         html_filename = f"{number}{name}.html"
         html_file = generate_html(data, output_dir, html_filename)
-        open_html_in_default_browser(html_file)
+        if args.open_web:
+            open_html_in_default_browser(html_file)
 
         print(f"\n完成! 输出目录: {output_dir.absolute()}")
         print(f"网页文件: {html_file.absolute()}")

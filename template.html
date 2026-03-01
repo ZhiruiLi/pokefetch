@@ -38,6 +38,13 @@
             justify-content: center;
             gap: 8px;
         }
+        .header h1 a {
+            color: inherit;
+            text-decoration: none;
+        }
+        .header h1 a:hover {
+            text-decoration: underline;
+        }
         .name-type-icons {
             display: inline-flex;
             align-items: center;
@@ -84,6 +91,9 @@
         .table-frame + .table-frame {
             margin-top: 4px;
         }
+        .ability-table-frame {
+            width: 100%;
+        }
         .attack-table,
         .defense-table {
             width: 100%;
@@ -124,6 +134,17 @@
         .defense-table .row-label {
             width: calc(160px * 2 / 3);
             font-weight: 700;
+        }
+        .ability-table {
+            table-layout: fixed;
+        }
+        .ability-table tr > td:nth-child(2),
+        .ability-table tr > th:nth-child(2) {
+            width: 40%;
+        }
+        .ability-table tr > td:nth-child(3),
+        .ability-table tr > th:nth-child(3) {
+            width: 60%;
         }
         .form-title {
             margin: 12px 0 10px;
@@ -238,7 +259,7 @@
         <div class="header">
             <div class="number">#{{ data.number }}</div>
             <h1>
-                <span>{{ data.name }}</span>
+                <a href="{{ data.detail_url }}" target="_blank" rel="noopener noreferrer">{{ data.name }}</a>
             </h1>
         </div>
 
@@ -254,8 +275,8 @@
                 <p>暂无图片</p>
                 {% endif %}
             </div>
-            <div class="table-frame">
-                <table class="defense-table">
+            <div class="table-frame ability-table-frame">
+                <table class="defense-table ability-table">
                     <tr>
                         <td class="defense-title" style="color: #000;">特性名</td>
                         <td class="defense-title" style="color: #000;">文字介绍</td>
