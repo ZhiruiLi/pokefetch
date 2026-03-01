@@ -98,6 +98,9 @@ uv run python main.py 0006 --no-cache
 
 # 刷新缓存
 uv run python main.py 0006 --refresh-cache
+
+# 生成后自动打开网页
+uv run python main.py 0006 -w
 ```
 
 ## 命令行参数
@@ -108,6 +111,7 @@ uv run python main.py 0006 --refresh-cache
 | `--output-dir` | 输出目录 | `out` |
 | `--no-cache` | 禁用页面缓存，每次都重新请求 | `false` |
 | `--refresh-cache` | 刷新缓存（重新请求并覆盖缓存） | `false` |
+| `-w`, `--open-web` | 生成后自动用系统默认浏览器打开网页 | `false` |
 
 ## 输出规则
 
