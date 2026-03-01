@@ -10,6 +10,7 @@ import os
 import re
 import shutil
 import sys
+import webbrowser
 from pathlib import Path
 from urllib.parse import quote, urljoin
 
@@ -750,19 +751,58 @@ def is_ability_page_link(href: str) -> bool:
     return "（特性）" in href or "%EF%BC%88%E7%89%B9%E6%80%A7%EF%BC%89" in href
 
 
+def extract_primary_form_image_src(row: BeautifulSoup) -> str:
+    """从 form 行中提取主形态图（兼容 260px/300px）"""
+    candidates: list[tuple[int, str]] = []
+
+    for img in row.find_all("img"):
+        src = img.get("src", "")
+        if not src or "px-" not in src:
+            continue
+
+        lower = src.lower()
+        if any(token in lower for token in ["tcg", "body", "sprite", "dream", "icon"]):
+            continue
+
+        size_match = re.search(r"/(\d+)px-", lower)
+        size = int(size_match.group(1)) if size_match else 0
+        if size < 120:
+            continue
+
+        candidates.append((size, src))
+
+    if not candidates:
+        return ""
+
+    max_size = max(size for size, _ in candidates)
+    for size, src in candidates:
+        if size == max_size:
+            return src
+
+    return ""
+
+
 def infer_form_name_from_image_src(image_src: str, pokemon_name: str) -> str:
     """根据形态主图文件名推断形态名称"""
     raw = (image_src or "").split("?")[0]
     filename = Path(raw).name
-    if filename.startswith("300px-"):
-        filename = filename[len("300px-"):]
+    filename = re.sub(r"^\d+px-", "", filename)
 
     stem = Path(filename).stem
-    if "-" not in stem:
+    normalized_stem = stem.replace("_", "-").replace(" ", "-")
+    if "-" not in normalized_stem:
         return pokemon_name
 
-    suffix = stem.split("-", 1)[1].lower()
-    normalized_suffix = suffix.replace("_", "-").replace(" ", "-")
+    suffix = normalized_stem.split("-", 1)[1].lower()
+    normalized_suffix = suffix
+
+    if pokemon_name == "皮卡丘":
+        if any(tag in normalized_suffix for tag in ["pop-star", "phd", "libre", "belle", "rock-star", "cosplay"]):
+            return "换装皮卡丘"
+        if any(tag in normalized_suffix for tag in ["original", "hoenn", "sinnoh", "unova", "kalos", "alola", "partner-cap", "world", "cap"]):
+            return "戴着帽子的皮卡丘"
+        if normalized_suffix.startswith("partner"):
+            return "搭档皮卡丘"
 
     if normalized_suffix.startswith("mega-x"):
         return f"超级{pokemon_name}X"
@@ -770,18 +810,18 @@ def infer_form_name_from_image_src(image_src: str, pokemon_name: str) -> str:
         return f"超级{pokemon_name}Y"
     if normalized_suffix.startswith("mega"):
         return f"超级{pokemon_name}"
-    if suffix.startswith("gigantamax") or suffix.startswith("gmax"):
+    if normalized_suffix.startswith("gigantamax") or normalized_suffix.startswith("gmax"):
         return f"超极巨化{pokemon_name}"
-    if suffix.startswith("alola"):
+    if normalized_suffix.startswith("alola"):
         return f"阿罗拉{pokemon_name}"
-    if suffix.startswith("galar"):
+    if normalized_suffix.startswith("galar"):
         return f"伽勒尔{pokemon_name}"
-    if suffix.startswith("hisui"):
+    if normalized_suffix.startswith("hisui"):
         return f"洗翠{pokemon_name}"
-    if suffix.startswith("paldea"):
+    if normalized_suffix.startswith("paldea"):
         return f"帕底亚{pokemon_name}"
 
-    return f"{pokemon_name}（{suffix}）"
+    return f"{pokemon_name}（{normalized_suffix}）"
 
 
 def normalize_form_name_for_match(form_name: str, pokemon_name: str) -> str:
@@ -829,10 +869,7 @@ def extract_form_images(soup: BeautifulSoup, pokemon_name: str) -> list[dict]:
     seen_form_keys: set[str] = set()
 
     for row in form_rows:
-        image_src = next(
-            (img.get("src", "") for img in row.find_all("img") if "300px-" in (img.get("src", "") or "")),
-            ""
-        )
+        image_src = extract_primary_form_image_src(row)
         if not image_src:
             continue
 
@@ -1040,17 +1077,15 @@ def extract_form_ability_tables(soup: BeautifulSoup, pokemon_name: str) -> list[
     ]
 
     extracted_forms: list[dict] = []
-    seen_signatures: set[tuple[str, tuple[str, ...]]] = set()
+    seen_form_keys: set[str] = set()
 
     for row in form_rows:
-        image_src = next(
-            (img.get("src", "") for img in row.find_all("img") if "300px-" in (img.get("src", "") or "")),
-            ""
-        )
+        image_src = extract_primary_form_image_src(row)
         if not image_src:
             continue
 
         form_name = infer_form_name_from_image_src(image_src, pokemon_name)
+        form_key = normalize_form_name_for_match(form_name, pokemon_name)
 
         ability_links: list[tuple[str, str]] = []
         seen_ability_names: set[str] = set()
@@ -1069,10 +1104,9 @@ def extract_form_ability_tables(soup: BeautifulSoup, pokemon_name: str) -> list[
         if not ability_links:
             continue
 
-        signature = (form_name, tuple(name for name, _ in ability_links))
-        if signature in seen_signatures:
+        if form_key in seen_form_keys:
             continue
-        seen_signatures.add(signature)
+        seen_form_keys.add(form_key)
 
         extracted_forms.append({
             "form_name": form_name,
@@ -1080,8 +1114,19 @@ def extract_form_ability_tables(soup: BeautifulSoup, pokemon_name: str) -> list[
         })
 
     if not extracted_forms:
-        # 单形态兜底：尽量从首个信息框提取特性链接
-        infobox = soup.find("table", class_=re.compile("roundy"))
+        # 单形态兜底：尽量从信息框提取特性链接
+        infobox = next(
+            (
+                t for t in soup.find_all("table", class_=re.compile("roundy"))
+                if (
+                    ("属性" in t.get_text(" ", strip=True) or "屬性" in t.get_text(" ", strip=True))
+                    and "特性" in t.get_text(" ", strip=True)
+                )
+            ),
+            None,
+        )
+        if not infobox:
+            infobox = soup.find("table", class_=re.compile("roundy"))
         if infobox:
             fallback_links: list[tuple[str, str]] = []
             seen_names: set[str] = set()
@@ -1460,6 +1505,19 @@ def generate_html(data: dict, output_dir: Path, html_filename: str) -> Path:
     return output_file
 
 
+def open_html_in_default_browser(html_file: Path) -> None:
+    """在系统默认浏览器中打开生成的 HTML 文件"""
+    try:
+        file_url = html_file.absolute().as_uri()
+        opened = webbrowser.open(file_url)
+        if opened:
+            print(f"已在默认浏览器打开: {html_file}")
+        else:
+            print(f"未能自动打开浏览器，请手动打开: {html_file}")
+    except Exception as e:
+        print(f"自动打开浏览器失败: {e}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pokemon PPT Helper Tool")
     parser.add_argument(
@@ -1617,6 +1675,7 @@ def main():
         # 7. 生成网页
         html_filename = f"{number}{name}.html"
         html_file = generate_html(data, output_dir, html_filename)
+        open_html_in_default_browser(html_file)
 
         print(f"\n完成! 输出目录: {output_dir.absolute()}")
         print(f"网页文件: {html_file.absolute()}")
