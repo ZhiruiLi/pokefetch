@@ -317,6 +317,18 @@ def parse_stats_table(table: BeautifulSoup, form_name: str) -> dict | None:
     rows_data = []
     total = ""
 
+    table_theme_class = ""
+    table_bg_color = ""
+    for cls in table.get("class", []):
+        if isinstance(cls, str) and re.match(r"^(bg|bgl|bgd)-", cls):
+            table_theme_class = cls
+            break
+
+    style_text = table.get("style", "")
+    bg_match = re.search(r"background(?:-color)?\s*:\s*([^;]+)", style_text, flags=re.IGNORECASE)
+    if bg_match:
+        table_bg_color = bg_match.group(1).strip()
+
     stat_key_map = {
         "ＨＰ": ("hp", "HP"),
         "HP": ("hp", "HP"),
@@ -391,7 +403,9 @@ def parse_stats_table(table: BeautifulSoup, form_name: str) -> dict | None:
     return {
         "form_name": form_name,
         "rows": rows_data,
-        "total": total
+        "total": total,
+        "table_theme_class": table_theme_class,
+        "table_bg_color": table_bg_color,
     }
 
 
@@ -936,6 +950,50 @@ def assign_form_images_to_ability_tables(
         if not remaining_paths:
             break
         form["image_path"] = remaining_paths.pop(0)
+
+
+def normalize_type_name_for_theme(type_name: str) -> str:
+    """将属性名称归一化为站点样式可识别名称"""
+    t = (type_name or "").strip()
+    if not t:
+        return ""
+
+    t = t.replace("飛", "飞").replace("電", "电").replace("龍", "龙").replace("鋼", "钢").replace("惡", "恶")
+    t = t.replace("鬥", "斗")
+    t = TYPE_ICON_ALIASES.get(t, t)
+    return t
+
+
+def assign_stats_theme_classes(
+    stats_tables: list[dict],
+    type_effectiveness_forms: list[dict],
+    pokemon_name: str,
+) -> None:
+    """按形态为种族值表补充主题色 class（优先使用解析结果，缺失时用属性兜底）"""
+    if not stats_tables:
+        return
+
+    type_theme_by_key: dict[str, str] = {}
+    for form in type_effectiveness_forms:
+        form_name = form.get("form_name", "默认")
+        form_key = normalize_form_name_for_match(form_name, pokemon_name)
+        form_types = form.get("types", []) or []
+        if not form_types:
+            continue
+
+        primary_type = normalize_type_name_for_theme(form_types[0])
+        if primary_type:
+            type_theme_by_key[form_key] = f"bg-{primary_type}"
+
+    fallback_theme = type_theme_by_key.get("default", "") or next(iter(type_theme_by_key.values()), "")
+
+    for stats_form in stats_tables:
+        if stats_form.get("table_theme_class"):
+            continue
+
+        form_name = stats_form.get("form_name", "默认")
+        form_key = normalize_form_name_for_match(form_name, pokemon_name)
+        stats_form["table_theme_class"] = type_theme_by_key.get(form_key, fallback_theme)
 
 
 def extract_ability_battle_effect(ability_url: str) -> str:
@@ -1525,6 +1583,7 @@ def main():
 
         assign_form_images_to_effectiveness_forms(type_effectiveness_forms, form_images, name)
         assign_form_images_to_ability_tables(form_ability_tables, form_images, name)
+        assign_stats_theme_classes(stats_tables, type_effectiveness_forms, name)
 
         image_path = next(
             (

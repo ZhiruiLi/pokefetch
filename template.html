@@ -142,7 +142,7 @@
             overflow: hidden;
             margin: 8px auto 0;
             table-layout: auto;
-            background: #c8ffa3;
+            background: var(--stats-table-bg, #c8ffa3);
         }
         .stats-table th,
         .stats-table td {
@@ -162,7 +162,7 @@
             border-bottom: none;
         }
         .stats-table thead th {
-            background: #c8ffa3;
+            background: var(--stats-table-head-bg, var(--stats-table-bg, #c8ffa3));
             font-weight: 800;
         }
         .stats-table .name-cell {
@@ -205,7 +205,7 @@
             height: 20px;
         }
         .stats-table .total-row td {
-            background: #c8ffa3;
+            background: var(--stats-table-bg, #c8ffa3);
             font-weight: 800;
         }
         .stats-table tr.bgl-HP td { background: #a9c789; }
@@ -347,7 +347,9 @@
             <h2>种族值</h2>
             {% for form in data.stats_tables %}
             <h3 class="form-title">{{ '一般' if form.form_name == '默认' else form.form_name }}</h3>
-            <table class="stats-table">
+            {% set stats_theme_class = form.table_theme_class if form.table_theme_class else '' %}
+            {% set stats_bg_value = form.table_bg_color if form.table_bg_color else 'var(--bgl, #c8ffa3)' %}
+            <table class="stats-table {{ stats_theme_class }}" style="--stats-table-bg: {{ stats_bg_value }}; --stats-table-head-bg: {{ stats_bg_value }};">
                 <thead>
                     <tr>
                         <th colspan="2">种族值</th>
