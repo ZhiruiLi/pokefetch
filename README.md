@@ -78,6 +78,9 @@ uv run python main.py [identifier]
 ```
 
 - 默认会启动本地服务（左侧搜索列表 + 右侧详情页）
+- 左侧支持中文、拼音、英文搜索，显示编号/中文名/英文名/属性
+- 提供“手气不错”随机按钮与“刷新列表（重新拉取）”按钮
+- 运行服务时，在命令行按 `Enter` 可重新打开页面，按 `Ctrl+C` 停止服务
 - `identifier` 可选；提供后会在页面打开后优先加载该宝可梦
 - `identifier` 可以是：
   - 图鉴编号（如 `0003`）
@@ -91,6 +94,9 @@ uv run python main.py
 
 # 启动本地服务，并默认打开该宝可梦详情
 uv run python main.py 0003
+
+# 可用英文/拼音搜索（在左侧搜索框输入）
+# 例如: bulbasaur / pika / pkq
 
 # 指定输出目录
 uv run python main.py --output-dir demo_out

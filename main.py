@@ -12,6 +12,7 @@ import os
 import re
 import shutil
 import sys
+import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -20,6 +21,7 @@ from urllib.parse import parse_qs, quote, unquote, urljoin
 import requests
 from bs4 import BeautifulSoup
 from jinja2 import Template
+from pypinyin import Style, lazy_pinyin
 
 def get_app_dir() -> Path:
     """返回应用目录（源码模式为脚本目录，EXE 模式为 exe 所在目录）"""
@@ -53,6 +55,7 @@ TEMPLATE_FILE = BUNDLE_DIR / "template.html"
 SITE_STYLES_FILE = BUNDLE_DIR / "wiki_site_styles.css"
 ICONS_DIR = BUNDLE_DIR / "icons"
 POKEMON_INDEX_CACHE: list[dict] | None = None
+TYPE_BG_COLOR_CACHE: dict[str, str] | None = None
 
 TYPE_ICON_ALIASES = {
     "斗": "格斗",
@@ -275,6 +278,65 @@ def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
     raise ValueError(f"未找到 Pokemon: {identifier}")
 
 
+def build_pinyin_aliases(text: str) -> tuple[str, str]:
+    """构建中文名称对应的拼音全拼与首字母简拼"""
+    full = "".join(lazy_pinyin(text, errors="ignore")).lower()
+    initials = "".join(lazy_pinyin(text, style=Style.FIRST_LETTER, errors="ignore")).lower()
+    return full, initials
+
+
+def load_type_bg_color_map() -> dict[str, str]:
+    """从 wiki 样式文件中提取属性背景色映射（.bg-属性 -> --bg）"""
+    global TYPE_BG_COLOR_CACHE
+    if TYPE_BG_COLOR_CACHE is not None:
+        return TYPE_BG_COLOR_CACHE
+
+    color_map: dict[str, str] = {}
+    if SITE_STYLES_FILE.exists():
+        css_text = SITE_STYLES_FILE.read_text(encoding="utf-8", errors="ignore")
+        for name, color in re.findall(r":where\(\.bg-([^,\.\)]+)[^\)]*\)\{--bg:([^;\}]+);", css_text):
+            key = name.strip()
+            value = color.strip()
+            if key and value and key not in color_map:
+                color_map[key] = value
+
+    TYPE_BG_COLOR_CACHE = color_map
+    return color_map
+
+
+def get_type_bg_color(type_name: str) -> str:
+    """获取属性背景色（优先读取源站样式映射）"""
+    color_map = load_type_bg_color_map()
+    return color_map.get(type_name, "#94a3b8")
+
+
+def extract_types_from_list_cells(cells: list[BeautifulSoup]) -> list[str]:
+    """从全国图鉴列表行中提取属性"""
+    types: list[str] = []
+    for idx in [6, 7]:
+        if idx >= len(cells):
+            continue
+        cell = cells[idx]
+
+        link_texts = [a.get_text(strip=True) for a in cell.find_all("a")]
+        candidates = link_texts if link_texts else [cell.get_text(" ", strip=True)]
+
+        found = ""
+        for candidate in candidates:
+            normalized = re.sub(r"\s+", "", candidate)
+            for t in TYPE_ORDER:
+                if t in normalized:
+                    found = t
+                    break
+            if found:
+                break
+
+        if found and found not in types:
+            types.append(found)
+
+    return types
+
+
 def build_pokemon_index() -> list[dict]:
     """从列表页提取 Pokemon 索引（编号、名称、详情链接）"""
     soup = fetch_page(LIST_URL)
@@ -286,7 +348,7 @@ def build_pokemon_index() -> list[dict]:
     for table in tables:
         for row in table.find_all("tr"):
             cells = row.find_all("td")
-            if len(cells) < 4:
+            if len(cells) < 6:
                 continue
 
             num_cell = cells[0].get_text(strip=True)
@@ -309,9 +371,18 @@ def build_pokemon_index() -> list[dict]:
                 continue
             seen_numbers.add(number)
 
+            name_en = cells[5].get_text(" ", strip=True) if len(cells) > 5 else ""
+            types = extract_types_from_list_cells(cells)
+            type_colors = [get_type_bg_color(t) for t in types]
+            name_pinyin, name_initials = build_pinyin_aliases(name)
             entries.append({
                 "number": number,
                 "name": name,
+                "name_en": name_en,
+                "types": types,
+                "type_colors": type_colors,
+                "name_pinyin": name_pinyin,
+                "name_initials": name_initials,
                 "detail_url": urljoin(BASE_URL, href),
             })
 
@@ -341,18 +412,27 @@ def refresh_pokemon_index(force_refresh_cache: bool = True) -> list[dict]:
 
 
 def search_pokemon_entries(query: str) -> list[dict]:
-    """按编号/名称搜索 Pokemon 条目"""
+    """按编号/中文名/英文名/拼音搜索 Pokemon 条目"""
     entries = get_pokemon_index()
-    q = (query or "").strip()
+    q = re.sub(r"\s+", "", (query or "").strip()).lower()
     if not q:
         return entries
 
-    q_lower = q.lower()
     results: list[dict] = []
     for item in entries:
-        number = item.get("number", "")
-        name = item.get("name", "")
-        if q_lower in number.lower() or q_lower in name.lower():
+        number = item.get("number", "").lower()
+        name = item.get("name", "").lower()
+        name_en = item.get("name_en", "").lower()
+        name_pinyin = item.get("name_pinyin", "")
+        name_initials = item.get("name_initials", "")
+
+        if (
+            q in number
+            or q in name
+            or q in name_en
+            or q in name_pinyin
+            or q in name_initials
+        ):
             results.append(item)
 
     return results
@@ -1835,13 +1915,39 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
     .app {{ display: flex; height: 100vh; }}
     .left {{ width: 340px; border-right: 1px solid #dfe3eb; background: #fff; display: flex; flex-direction: column; }}
     .search {{ padding: 12px; border-bottom: 1px solid #eef1f6; }}
-    .search input {{ width: 100%; padding: 10px 12px; border: 1px solid #cfd6e4; border-radius: 8px; }}
+    .search-input-wrap {{ position: relative; }}
+    .search input {{ width: 100%; padding: 10px 36px 10px 12px; border: 1px solid #cfd6e4; border-radius: 8px; }}
+    .search-clear-btn {{
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      border: 0;
+      border-radius: 50%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      background: #d1d5db;
+      color: #fff;
+      font-size: 12px;
+      line-height: 1;
+      padding: 0;
+    }}
+    .search-clear-btn.show {{ display: inline-flex; }}
+    .search-clear-btn:hover {{ background: #9ca3af; }}
     .list {{ overflow: auto; flex: 1; }}
     .item {{ width: 100%; border: 0; background: #fff; text-align: left; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #f0f2f7; }}
     .item:hover {{ background: #f7faff; }}
     .item.active {{ background: #eaf2ff; }}
-    .id {{ color: #6b7280; margin-right: 8px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-    .name {{ color: #111827; }}
+    .item-main {{ display: flex; align-items: baseline; gap: 8px; }}
+    .item-sub {{ margin-top: 5px; font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+    .id {{ color: #6b7280; margin-right: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+    .name {{ color: #111827; font-weight: 600; }}
+    .name-en {{ color: #64748b; }}
+    .type-chip {{ border: 1px solid transparent; border-radius: 10px; padding: 1px 6px; color: #fff; font-weight: 600; }}
     .right {{ flex: 1; display: flex; flex-direction: column; position: relative; }}
     .toolbar {{ height: 46px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #dfe3eb; background: #fff; color: #4b5563; gap: 12px; }}
     #status {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }}
@@ -1894,8 +2000,12 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       <div class=\"search\">
         <div class=\"toolbar-actions\" style=\"margin-bottom: 8px;\">
           <button id=\"refreshListBtn\" class=\"btn\" type=\"button\">刷新列表（重新拉取）</button>
+          <button id=\"luckyBtn\" class=\"btn\" type=\"button\">手气不错</button>
         </div>
-        <input id=\"searchInput\" placeholder=\"搜索编号或名称（例如 0025 / 皮卡）\" />
+        <div class=\"search-input-wrap\">
+          <input id=\"searchInput\" placeholder=\"搜索编号/名字(中英文拼音)\" />
+          <button id=\"clearSearchBtn\" class=\"search-clear-btn\" type=\"button\" aria-label=\"清空搜索\">×</button>
+        </div>
       </div>
       <div id=\"list\" class=\"list\"></div>
     </aside>
@@ -1924,19 +2034,33 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
     const statusEl = document.getElementById('status');
     const refreshBtn = document.getElementById('refreshBtn');
     const refreshListBtn = document.getElementById('refreshListBtn');
+    const luckyBtn = document.getElementById('luckyBtn');
+    const clearSearchBtn = document.getElementById('clearSearchBtn');
     const loadingMask = document.getElementById('loadingMask');
     const loadingText = document.getElementById('loadingText');
     let currentNumber = '';
     let currentName = '';
+    let currentItems = [];
 
     function setStatus(text) {{
       statusEl.textContent = text;
     }}
 
-    function setActive(number) {{
+    function updateSearchClearButton() {{
+      const hasText = searchInput.value.trim().length > 0;
+      clearSearchBtn.classList.toggle('show', hasText);
+    }}
+
+    function setActive(number, scrollIntoView = false) {{
       currentNumber = number;
+      let target = null;
       for (const btn of listEl.querySelectorAll('.item')) {{
-        btn.classList.toggle('active', btn.dataset.number === number);
+        const isActive = btn.dataset.number === number;
+        btn.classList.toggle('active', isActive);
+        if (isActive) target = btn;
+      }}
+      if (scrollIntoView && target) {{
+        target.scrollIntoView({{ block: 'center', behavior: 'smooth' }});
       }}
     }}
 
@@ -1945,6 +2069,8 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       loadingText.textContent = text;
       refreshBtn.disabled = loading;
       refreshListBtn.disabled = loading;
+      luckyBtn.disabled = loading;
+      clearSearchBtn.disabled = loading;
       listEl.style.pointerEvents = loading ? 'none' : 'auto';
       searchInput.style.pointerEvents = loading ? 'none' : 'auto';
     }}
@@ -1982,12 +2108,17 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
     }}
 
     function renderList(items) {{
+      currentItems = items || [];
       listEl.innerHTML = '';
-      for (const item of items) {{
+      for (const item of currentItems) {{
         const btn = document.createElement('button');
         btn.className = 'item';
         btn.dataset.number = item.number;
-        btn.innerHTML = `<span class=\"id\">#${{item.number}}</span><span class=\"name\">${{item.name}}</span>`;
+        const typeHtml = (item.types || []).map((t, i) => {{
+          const c = (item.type_colors || [])[i] || '#94a3b8';
+          return `<span class=\"type-chip\" style=\"background:${{c}};border-color:${{c}};\">${{t}}</span>`;
+        }}).join('');
+        btn.innerHTML = `<div class=\"item-main\"><span class=\"id\">#${{item.number}}</span><span class=\"name\">${{item.name}}</span></div><div class=\"item-sub\"><span class=\"name-en\">${{item.name_en || ''}}</span>${{typeHtml}}</div>`;
         btn.onclick = async () => {{
           setActive(item.number);
           try {{
@@ -2023,8 +2154,28 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       }}
     }});
 
+    luckyBtn.addEventListener('click', async () => {{
+      try {{
+        let items = currentItems;
+        if (!items || items.length === 0) {{
+          items = await fetchList(searchInput.value.trim());
+          renderList(items);
+        }}
+        if (!items || items.length === 0) {{
+          setStatus('当前列表为空，无法随机选择');
+          return;
+        }}
+        const picked = items[Math.floor(Math.random() * items.length)];
+        setActive(picked.number, true);
+        await renderPokemon(picked.number, picked.name);
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }});
+
     let timer = null;
     searchInput.addEventListener('input', () => {{
+      updateSearchClearButton();
       clearTimeout(timer);
       timer = setTimeout(async () => {{
         try {{
@@ -2036,10 +2187,24 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       }}, 200);
     }});
 
+    clearSearchBtn.addEventListener('click', async () => {{
+      searchInput.value = '';
+      updateSearchClearButton();
+      searchInput.focus();
+      try {{
+        const items = await fetchList('');
+        renderList(items);
+        setStatus('已清空搜索');
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }});
+
     (async () => {{
       try {{
         const items = await fetchList('');
         renderList(items);
+        updateSearchClearButton();
         if (initialIdentifier) {{
           await renderPokemon(initialIdentifier, initialIdentifier);
         }}
@@ -2170,12 +2335,29 @@ def start_local_mvp_service(output_dir: Path, initial_identifier: str | None = N
     server = ThreadingHTTPServer((host, port), PokemonMVPHandler)
     app_url = f"http://{host}:{port}/"
     print(f"本地服务已启动: {app_url}")
-    print("按 Ctrl+C 停止服务")
+    print("按 Enter 重新打开页面，按 Ctrl+C 停止服务")
 
-    try:
-        webbrowser.open(app_url)
-    except Exception:
-        pass
+    def open_app_page() -> None:
+        try:
+            webbrowser.open(app_url)
+        except Exception:
+            pass
+
+    def listen_enter_to_reopen() -> None:
+        while True:
+            try:
+                user_input = input()
+            except EOFError:
+                break
+            except Exception:
+                break
+
+            if user_input.strip() == "":
+                print("重新打开页面...")
+                open_app_page()
+
+    open_app_page()
+    threading.Thread(target=listen_enter_to_reopen, daemon=True).start()
 
     try:
         server.serve_forever()
