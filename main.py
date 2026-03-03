@@ -225,9 +225,12 @@ def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
     # 判断输入是编号还是名字
     is_number = identifier.isdigit()
     search_num = identifier.zfill(4) if is_number else None
+    identifier_norm = normalize_name_for_match(identifier)
 
     # 查找所有表格 (使用 roundy 或 eplist 类)
     tables = soup.find_all("table", class_=["roundy", "eplist", "sortable"])
+
+    fallback_match: tuple[str, str, str] | None = None
 
     for table in tables:
         rows = table.find_all("tr")
@@ -244,36 +247,41 @@ def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
                 continue
             num = num_match.group(1)
 
-            # 提取名字 (第四列，包含中文名)
+            # 提取名字（保留形态后缀）
             name_cell = cells[3] if len(cells) > 3 else cells[2]
-            name_link = name_cell.find("a")
-            if not name_link:
-                # 尝试直接从单元格文本获取
-                name = name_cell.get_text(strip=True)
-                href = ""
-            else:
-                name = name_link.get_text(strip=True)
-                href = name_link.get("href", "")
-
+            name, base_name, href = extract_name_and_link_from_list_cell(name_cell)
             if not name:
                 continue
+
+            if href:
+                detail_url = urljoin(BASE_URL, href)
+            else:
+                detail_url = f"{BASE_URL}/wiki/{base_name or name}"
 
             # 匹配
             if is_number and num == search_num:
                 print(f"找到 Pokemon: #{num} {name}")
-                # 构建详情页URL
-                if href:
-                    detail_url = urljoin(BASE_URL, href)
-                else:
-                    detail_url = f"{BASE_URL}/wiki/{name}"
                 return num, name, detail_url
-            elif not is_number and identifier in name:
-                print(f"找到 Pokemon: #{num} {name}")
-                if href:
-                    detail_url = urljoin(BASE_URL, href)
-                else:
-                    detail_url = f"{BASE_URL}/wiki/{name}"
-                return num, name, detail_url
+
+            if not is_number:
+                name_norm = normalize_name_for_match(name)
+                base_name_norm = normalize_name_for_match(base_name)
+
+                # 优先精确匹配（支持括号/空白差异）
+                if identifier_norm and (identifier_norm == name_norm or identifier_norm == base_name_norm):
+                    print(f"找到 Pokemon: #{num} {name}")
+                    return num, name, detail_url
+
+                # 退化为模糊匹配
+                if identifier_norm and (
+                    identifier_norm in name_norm
+                    or identifier_norm in base_name_norm
+                ) and fallback_match is None:
+                    fallback_match = (num, name, detail_url)
+
+    if fallback_match is not None:
+        print(f"找到 Pokemon: #{fallback_match[0]} {fallback_match[1]}")
+        return fallback_match
 
     raise ValueError(f"未找到 Pokemon: {identifier}")
 
@@ -310,6 +318,24 @@ def get_type_bg_color(type_name: str) -> str:
     return color_map.get(type_name, "#94a3b8")
 
 
+def normalize_type_text(text: str) -> str:
+    """统一属性文案为简体，便于匹配（如 惡->恶）"""
+    normalized = re.sub(r"\s+", "", text or "")
+    replacements = {
+        "惡": "恶",
+        "龍": "龙",
+        "電": "电",
+        "鋼": "钢",
+        "飛": "飞",
+        "蟲": "虫",
+        "靈": "灵",
+        "鬥": "斗",
+    }
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+    return normalized
+
+
 def extract_types_from_list_cells(cells: list[BeautifulSoup]) -> list[str]:
     """从全国图鉴列表行中提取属性"""
     types: list[str] = []
@@ -323,7 +349,7 @@ def extract_types_from_list_cells(cells: list[BeautifulSoup]) -> list[str]:
 
         found = ""
         for candidate in candidates:
-            normalized = re.sub(r"\s+", "", candidate)
+            normalized = normalize_type_text(candidate)
             for t in TYPE_ORDER:
                 if t in normalized:
                     found = t
@@ -337,13 +363,53 @@ def extract_types_from_list_cells(cells: list[BeautifulSoup]) -> list[str]:
     return types
 
 
+def normalize_list_name_text(text: str) -> str:
+    """清理列表名称文本（去空白/脚注）"""
+    cleaned = re.sub(r"\[[^\]]*\]", "", text or "")
+    cleaned = cleaned.replace("\xa0", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def normalize_name_for_match(text: str) -> str:
+    """统一名称匹配键（忽略空白、括号、部分分隔符差异）"""
+    normalized = normalize_list_name_text(text)
+    normalized = normalized.replace("（", "(").replace("）", ")")
+    normalized = re.sub(r"[\s()（）·・_\-/]+", "", normalized)
+    return normalized.lower()
+
+
+def extract_name_and_link_from_list_cell(name_cell: BeautifulSoup) -> tuple[str, str, str]:
+    """提取列表名称列中的展示名、基础名和链接"""
+    raw_name = normalize_list_name_text(name_cell.get_text(" ", strip=True))
+    name_link = name_cell.find("a")
+
+    if not name_link:
+        return raw_name, raw_name, ""
+
+    base_name = normalize_list_name_text(name_link.get_text(" ", strip=True))
+    href = (name_link.get("href", "") or "").strip()
+    display_name = raw_name or base_name
+
+    # 列表中常见表现："索罗亚克 洗翠的样子"，统一显示为"索罗亚克（洗翠的样子）"
+    if base_name and display_name and display_name != base_name and "（" not in display_name and "(" not in display_name:
+        suffix = display_name.removeprefix(base_name).strip(" -·・/、，,")
+        if suffix:
+            display_name = f"{base_name}（{suffix}）"
+
+    if not display_name:
+        display_name = base_name
+
+    return display_name, (base_name or display_name), href
+
+
 def build_pokemon_index() -> list[dict]:
     """从列表页提取 Pokemon 索引（编号、名称、详情链接）"""
     soup = fetch_page(LIST_URL)
     tables = soup.find_all("table", class_=["roundy", "eplist", "sortable"])
 
     entries: list[dict] = []
-    seen_numbers: set[str] = set()
+    seen_entries: set[tuple[str, str, str]] = set()
 
     for table in tables:
         for row in table.find_all("tr"):
@@ -358,23 +424,23 @@ def build_pokemon_index() -> list[dict]:
             number = num_match.group(1)
 
             name_cell = cells[3] if len(cells) > 3 else cells[2]
-            name_link = name_cell.find("a")
-            if not name_link:
+            name, base_name, href = extract_name_and_link_from_list_cell(name_cell)
+            if not name:
                 continue
 
-            name = name_link.get_text(strip=True)
-            href = name_link.get("href", "")
-            if not name or not href:
+            # 同编号不同形态需要保留；只去重完全相同条目
+            dedup_key = (number, normalize_name_for_match(name), href)
+            if dedup_key in seen_entries:
                 continue
-
-            if number in seen_numbers:
-                continue
-            seen_numbers.add(number)
+            seen_entries.add(dedup_key)
 
             name_en = cells[5].get_text(" ", strip=True) if len(cells) > 5 else ""
             types = extract_types_from_list_cells(cells)
             type_colors = [get_type_bg_color(t) for t in types]
             name_pinyin, name_initials = build_pinyin_aliases(name)
+            item_key = hashlib.md5(f"{number}|{name}|{href}".encode("utf-8")).hexdigest()[:12]
+
+            detail_url = urljoin(BASE_URL, href) if href else f"{BASE_URL}/wiki/{base_name or name}"
             entries.append({
                 "number": number,
                 "name": name,
@@ -383,7 +449,9 @@ def build_pokemon_index() -> list[dict]:
                 "type_colors": type_colors,
                 "name_pinyin": name_pinyin,
                 "name_initials": name_initials,
-                "detail_url": urljoin(BASE_URL, href),
+                "detail_url": detail_url,
+                "identifier": name,
+                "item_key": item_key,
             })
 
     entries.sort(key=lambda x: x.get("number", "9999"))
@@ -414,21 +482,22 @@ def refresh_pokemon_index(force_refresh_cache: bool = True) -> list[dict]:
 def search_pokemon_entries(query: str) -> list[dict]:
     """按编号/中文名/英文名/拼音搜索 Pokemon 条目"""
     entries = get_pokemon_index()
-    q = re.sub(r"\s+", "", (query or "").strip()).lower()
+    q = normalize_name_for_match(query)
     if not q:
         return entries
 
     results: list[dict] = []
     for item in entries:
         number = item.get("number", "").lower()
-        name = item.get("name", "").lower()
+        name = item.get("name", "")
+        name_norm = normalize_name_for_match(name)
         name_en = item.get("name_en", "").lower()
         name_pinyin = item.get("name_pinyin", "")
         name_initials = item.get("name_initials", "")
 
         if (
             q in number
-            or q in name
+            or q in name_norm
             or q in name_en
             or q in name_pinyin
             or q in name_initials
@@ -1956,6 +2025,32 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
     .btn:hover {{ background: #f3f6fb; }}
     .btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
     iframe {{ border: 0; width: 100%; height: calc(100vh - 46px); background: #fff; }}
+    .empty-state {{
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 46px;
+      bottom: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+      color: #334155;
+      z-index: 2;
+      padding: 20px;
+      text-align: center;
+    }}
+    .empty-state.show {{ display: flex; }}
+    .empty-card {{
+      max-width: 420px;
+      border: 1px solid #dbe2f0;
+      border-radius: 12px;
+      padding: 18px 20px;
+      background: #ffffff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }}
+    .empty-title {{ font-size: 16px; font-weight: 600; color: #0f172a; margin-bottom: 6px; }}
+    .empty-desc {{ font-size: 13px; color: #64748b; line-height: 1.6; }}
     .loading-mask {{
       position: absolute;
       left: 0;
@@ -2003,7 +2098,7 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
           <button id=\"luckyBtn\" class=\"btn\" type=\"button\">手气不错</button>
         </div>
         <div class=\"search-input-wrap\">
-          <input id=\"searchInput\" placeholder=\"搜索编号/名字(中英文拼音)\" />
+          <input id=\"searchInput\" placeholder=\"搜索编号/名字/形态(中英文拼音)\" />
           <button id=\"clearSearchBtn\" class=\"search-clear-btn\" type=\"button\" aria-label=\"清空搜索\">×</button>
         </div>
       </div>
@@ -2017,6 +2112,12 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
         </div>
       </div>
       <iframe id=\"detailFrame\" title=\"pokemon-detail\"></iframe>
+      <div id=\"emptyState\" class=\"empty-state show\">
+        <div class=\"empty-card\">
+          <div class=\"empty-title\">欢迎使用 Pokefetch</div>
+          <div class=\"empty-desc\">请从左侧选择一个宝可梦以加载详情。<br/>也可以点击“手气不错”随机开始。</div>
+        </div>
+      </div>
       <div id=\"loadingMask\" class=\"loading-mask\">
         <div class=\"loading-card\">
           <div class=\"spinner\"></div>
@@ -2038,7 +2139,9 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
     const clearSearchBtn = document.getElementById('clearSearchBtn');
     const loadingMask = document.getElementById('loadingMask');
     const loadingText = document.getElementById('loadingText');
-    let currentNumber = '';
+    const emptyState = document.getElementById('emptyState');
+    let currentIdentifier = '';
+    let currentSelectionKey = '';
     let currentName = '';
     let currentItems = [];
 
@@ -2051,11 +2154,11 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       clearSearchBtn.classList.toggle('show', hasText);
     }}
 
-    function setActive(number, scrollIntoView = false) {{
-      currentNumber = number;
+    function setActive(itemKey, scrollIntoView = false) {{
+      currentSelectionKey = itemKey || '';
       let target = null;
       for (const btn of listEl.querySelectorAll('.item')) {{
-        const isActive = btn.dataset.number === number;
+        const isActive = (btn.dataset.key || '') === (itemKey || '');
         btn.classList.toggle('active', isActive);
         if (isActive) target = btn;
       }}
@@ -2075,6 +2178,10 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       searchInput.style.pointerEvents = loading ? 'none' : 'auto';
     }}
 
+    function showEmptyState(visible) {{
+      emptyState.classList.toggle('show', !!visible);
+    }}
+
     async function fetchList(query = '', forceRefresh = false) {{
       const url = '/api/pokemon?q=' + encodeURIComponent(query) + (forceRefresh ? '&refresh=1' : '');
       const res = await fetch(url);
@@ -2083,11 +2190,15 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
       return data.items || [];
     }}
 
-    async function renderPokemon(identifier, displayName = '', forceRefresh = false) {{
+    async function renderPokemon(identifier, displayName = '', forceRefresh = false, itemKey = '') {{
       if (!identifier) return;
+      const hadContent = !!detailFrame.getAttribute('src');
+      currentIdentifier = identifier;
+      if (itemKey) setActive(itemKey);
       currentName = displayName || currentName || identifier;
       const actionText = forceRefresh ? '正在刷新' : '正在加载';
       setStatus(actionText + ' ' + (displayName || identifier) + ' 页面...');
+      showEmptyState(false);
       setLoading(true, actionText + ' ' + (displayName || identifier) + ' ...');
       try {{
         const res = await fetch('/api/render', {{
@@ -2101,7 +2212,9 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
         }}
         detailFrame.src = data.html_url + '?t=' + Date.now();
         setStatus('已加载：' + (displayName || currentName || identifier));
-        if (data.number) setActive(data.number);
+      }} catch (err) {{
+        if (!hadContent) showEmptyState(true);
+        throw err;
       }} finally {{
         setLoading(false);
       }}
@@ -2114,15 +2227,17 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
         const btn = document.createElement('button');
         btn.className = 'item';
         btn.dataset.number = item.number;
+        btn.dataset.key = item.item_key || `${{item.number}}-${{item.name}}`;
         const typeHtml = (item.types || []).map((t, i) => {{
           const c = (item.type_colors || [])[i] || '#94a3b8';
           return `<span class=\"type-chip\" style=\"background:${{c}};border-color:${{c}};\">${{t}}</span>`;
         }}).join('');
         btn.innerHTML = `<div class=\"item-main\"><span class=\"id\">#${{item.number}}</span><span class=\"name\">${{item.name}}</span></div><div class=\"item-sub\"><span class=\"name-en\">${{item.name_en || ''}}</span>${{typeHtml}}</div>`;
         btn.onclick = async () => {{
-          setActive(item.number);
+          const identifier = item.number;
+          setActive(btn.dataset.key || '');
           try {{
-            await renderPokemon(item.number, item.name);
+            await renderPokemon(identifier, item.name, false, btn.dataset.key || '');
           }} catch (err) {{
             setStatus('错误：' + err.message);
           }}
@@ -2132,12 +2247,12 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
     }}
 
     refreshBtn.addEventListener('click', async () => {{
-      if (!currentNumber) {{
+      if (!currentIdentifier) {{
         setStatus('请先从左侧选择一个宝可梦');
         return;
       }}
       try {{
-        await renderPokemon(currentNumber, currentName || currentNumber, true);
+        await renderPokemon(currentIdentifier, currentName || currentIdentifier, true, currentSelectionKey);
       }} catch (err) {{
         setStatus('错误：' + err.message);
       }}
@@ -2166,8 +2281,10 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
           return;
         }}
         const picked = items[Math.floor(Math.random() * items.length)];
-        setActive(picked.number, true);
-        await renderPokemon(picked.number, picked.name);
+        const pickedKey = picked.item_key || `${{picked.number}}-${{picked.name}}`;
+        const pickedIdentifier = picked.number;
+        setActive(pickedKey, true);
+        await renderPokemon(pickedIdentifier, picked.name, false, pickedKey);
       }} catch (err) {{
         setStatus('错误：' + err.message);
       }}
@@ -2207,6 +2324,9 @@ def render_mvp_index_page(initial_identifier: str | None = None) -> str:
         updateSearchClearButton();
         if (initialIdentifier) {{
           await renderPokemon(initialIdentifier, initialIdentifier);
+        }} else {{
+          showEmptyState(true);
+          setStatus('请选择左侧宝可梦以开始');
         }}
       }} catch (err) {{
         setStatus('错误：' + err.message);
