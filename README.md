@@ -41,8 +41,8 @@ build_exe.bat
 
 `dist/` 中还会同步可编辑配置文件：
 
-- `dist/name_mapping.txt`
-- `dist/ignore_skills.txt`
+- `dist/config/name_mapping.txt`
+- `dist/config/ignore_skills.txt`
 
 如需先清理旧产物再打包，可使用：
 
@@ -57,8 +57,8 @@ release_exe.bat
 压缩包内包含：
 
 - `pokefetch.exe`
-- `name_mapping.txt`
-- `ignore_skills.txt`
+- `config/name_mapping.txt`
+- `config/ignore_skills.txt`
 
 使用示例：
 
@@ -145,8 +145,8 @@ out/
 
 ## 可选配置文件
 
-- `name_mapping.txt`：名称映射（例如属性全称/简称映射）
-- `ignore_skills.txt`：在“形态技能池汇总”中过滤的技能名（每行一个，可用 `#` 注释）
+- `config/name_mapping.txt`：名称映射（例如属性全称/简称映射）
+- `config/ignore_skills.txt`：在“形态技能池汇总”中过滤的技能名（每行一个，可用 `#` 注释）
 
 ## 缓存说明
 

@@ -25,11 +25,8 @@ uv run pyinstaller ^
   --onefile ^
   --name pokefetch ^
   --icon "pokefetch.ico" ^
-  --add-data "template.html;." ^
-  --add-data "wiki_site_styles.css;." ^
-  --add-data "icons;icons" ^
-  --add-data "name_mapping.txt;." ^
-  --add-data "ignore_skills.txt;." ^
+  --add-data "assets;assets" ^
+  --add-data "config;config" ^
   main.py
 if errorlevel 1 (
     echo Build failed.
@@ -38,8 +35,9 @@ if errorlevel 1 (
 
 echo [3/4] Syncing editable resource files to dist...
 if not exist "dist" mkdir "dist"
-if exist "name_mapping.txt" copy /y "name_mapping.txt" "dist\name_mapping.txt" >nul
-if exist "ignore_skills.txt" copy /y "ignore_skills.txt" "dist\ignore_skills.txt" >nul
+if not exist "dist\config" mkdir "dist\config"
+if exist "config\name_mapping.txt" copy /y "config\name_mapping.txt" "dist\config\name_mapping.txt" >nul
+if exist "config\ignore_skills.txt" copy /y "config\ignore_skills.txt" "dist\config\ignore_skills.txt" >nul
 
 echo [4/4] Build completed.
 echo Output: dist\pokefetch.exe

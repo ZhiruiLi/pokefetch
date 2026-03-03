@@ -28,12 +28,12 @@ if not exist "%DIST_DIR%\pokefetch.exe" (
     echo Missing output: %DIST_DIR%\pokefetch.exe
     exit /b 1
 )
-if not exist "%DIST_DIR%\name_mapping.txt" (
-    echo Missing output: %DIST_DIR%\name_mapping.txt
+if not exist "%DIST_DIR%\config\name_mapping.txt" (
+    echo Missing output: %DIST_DIR%\config\name_mapping.txt
     exit /b 1
 )
-if not exist "%DIST_DIR%\ignore_skills.txt" (
-    echo Missing output: %DIST_DIR%\ignore_skills.txt
+if not exist "%DIST_DIR%\config\ignore_skills.txt" (
+    echo Missing output: %DIST_DIR%\config\ignore_skills.txt
     exit /b 1
 )
 
@@ -41,7 +41,7 @@ echo [4/5] Creating release archive...
 if exist "%ZIP_PATH%" (
     del /f /q "%ZIP_PATH%"
 )
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%DIST_DIR%\pokefetch.exe','%DIST_DIR%\name_mapping.txt','%DIST_DIR%\ignore_skills.txt' -DestinationPath '%ZIP_PATH%' -Force"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Compress-Archive -Path '%DIST_DIR%\pokefetch.exe','%DIST_DIR%\config\name_mapping.txt','%DIST_DIR%\config\ignore_skills.txt' -DestinationPath '%ZIP_PATH%' -Force"
 if errorlevel 1 (
     echo Failed to create archive: %ZIP_PATH%
     exit /b 1

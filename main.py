@@ -39,6 +39,14 @@ def get_bundle_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def resolve_existing_path(candidates: list[Path]) -> Path:
+    """返回首个存在的路径；若均不存在则返回第一个候选路径。"""
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
 # 常量定义
 BASE_URL = "https://wiki.52poke.com"
 LIST_URL = f"{BASE_URL}/wiki/宝可梦列表（按全国图鉴编号）"
@@ -50,11 +58,36 @@ BUNDLE_DIR = get_bundle_dir()
 CACHE_DIR = Path(".cache/pages")
 CACHE_ENABLED = True
 REFRESH_CACHE = False
-NAME_MAPPING_FILE = APP_DIR / "name_mapping.txt"
-IGNORE_SKILLS_FILE = APP_DIR / "ignore_skills.txt"
-TEMPLATE_FILE = BUNDLE_DIR / "template.html"
-SITE_STYLES_FILE = BUNDLE_DIR / "wiki_site_styles.css"
-ICONS_DIR = BUNDLE_DIR / "icons"
+
+ASSETS_DIR = resolve_existing_path([
+    BUNDLE_DIR / "assets",
+    BUNDLE_DIR,
+])
+CONFIG_DIR = resolve_existing_path([
+    APP_DIR / "config",
+    APP_DIR,
+])
+
+NAME_MAPPING_FILE = resolve_existing_path([
+    APP_DIR / "config" / "name_mapping.txt",
+    APP_DIR / "name_mapping.txt",
+])
+IGNORE_SKILLS_FILE = resolve_existing_path([
+    APP_DIR / "config" / "ignore_skills.txt",
+    APP_DIR / "ignore_skills.txt",
+])
+TEMPLATE_FILE = resolve_existing_path([
+    BUNDLE_DIR / "assets" / "template.html",
+    BUNDLE_DIR / "template.html",
+])
+SITE_STYLES_FILE = resolve_existing_path([
+    BUNDLE_DIR / "assets" / "wiki_site_styles.css",
+    BUNDLE_DIR / "wiki_site_styles.css",
+])
+ICONS_DIR = resolve_existing_path([
+    BUNDLE_DIR / "assets" / "icons",
+    BUNDLE_DIR / "icons",
+])
 POKEMON_INDEX_CACHE: list[dict] | None = None
 TYPE_BG_COLOR_CACHE: dict[str, str] | None = None
 

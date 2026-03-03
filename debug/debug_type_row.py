@@ -1,5 +1,10 @@
-from main import fetch_page, BASE_URL
 import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from main import fetch_page, BASE_URL
 
 soup = fetch_page(f"{BASE_URL}/wiki/凯西")
 links = soup.find_all("a")
