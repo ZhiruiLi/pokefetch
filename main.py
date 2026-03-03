@@ -5,6 +5,7 @@ Pokemon PPT Helper Tool
 """
 
 import argparse
+import colorsys
 import hashlib
 import json
 import mimetypes
@@ -316,6 +317,91 @@ def get_type_bg_color(type_name: str) -> str:
     """获取属性背景色（优先读取源站样式映射）"""
     color_map = load_type_bg_color_map()
     return color_map.get(type_name, "#94a3b8")
+
+
+def parse_css_color_to_hex(color_text: str) -> str:
+    """将 CSS 颜色文本解析为 #rrggbb（支持 #hex / rgb / var(..., #hex)）"""
+    text = (color_text or "").strip()
+    if not text:
+        return ""
+
+    hex_matches = re.findall(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b", text)
+    if hex_matches:
+        raw = hex_matches[-1]
+        if len(raw) == 3:
+            raw = "".join(ch * 2 for ch in raw)
+        return f"#{raw.lower()}"
+
+    rgb_match = re.search(
+        r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d\.]+)?\s*\)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if rgb_match:
+        r = max(0, min(255, int(rgb_match.group(1))))
+        g = max(0, min(255, int(rgb_match.group(2))))
+        b = max(0, min(255, int(rgb_match.group(3))))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    return ""
+
+
+def adjust_hex_color(hex_color: str, saturation_ratio: float = 0.55, lightness_ratio: float = 0.82) -> str:
+    """降低饱和度并调整明度，返回 #rrggbb。ratio < 1 表示降低。"""
+    normalized = parse_css_color_to_hex(hex_color)
+    if not normalized:
+        return ""
+
+    r = int(normalized[1:3], 16) / 255.0
+    g = int(normalized[3:5], 16) / 255.0
+    b = int(normalized[5:7], 16) / 255.0
+
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    s = max(0.0, min(1.0, s * saturation_ratio))
+    l = max(0.10, min(0.92, l * lightness_ratio))
+
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return f"#{int(round(r2 * 255)):02x}{int(round(g2 * 255)):02x}{int(round(b2 * 255)):02x}"
+
+
+def build_page_background_colors(stats_tables: list[dict], types: list[str], pokemon_name: str) -> tuple[str, str]:
+    """基于普通形态种族值表主题色，生成详情页背景渐变色。"""
+    default_start = "#667eea"
+    default_end = "#764ba2"
+
+    base_color = ""
+    target_stats = None
+
+    for form in stats_tables or []:
+        form_name = form.get("form_name", "默认")
+        if normalize_form_name_for_match(form_name, pokemon_name) == "default":
+            target_stats = form
+            break
+
+    if target_stats is None and stats_tables:
+        target_stats = stats_tables[0]
+
+    if target_stats:
+        base_color = parse_css_color_to_hex(target_stats.get("table_bg_color", ""))
+        if not base_color:
+            theme_class = target_stats.get("table_theme_class", "")
+            m = re.match(r"^(?:bg|bgl|bgd)-(.+)$", theme_class)
+            if m:
+                type_name = normalize_type_name_for_theme(m.group(1))
+                if type_name:
+                    base_color = parse_css_color_to_hex(get_type_bg_color(type_name))
+
+    if not base_color and types:
+        type_name = normalize_type_name_for_theme(types[0])
+        if type_name:
+            base_color = parse_css_color_to_hex(get_type_bg_color(type_name))
+
+    if not base_color:
+        return default_start, default_end
+
+    bg_start = adjust_hex_color(base_color, saturation_ratio=0.55, lightness_ratio=0.82) or default_start
+    bg_end = adjust_hex_color(base_color, saturation_ratio=0.58, lightness_ratio=0.68) or default_end
+    return bg_start, bg_end
 
 
 def normalize_type_text(text: str) -> str:
@@ -1941,6 +2027,8 @@ def convert_pokemon_to_html(
 
     # 6. 整理数据
     type_icons = build_type_icon_map()
+    page_bg_start, page_bg_end = build_page_background_colors(stats_tables, types, name)
+
     data = {
         "number": number,
         "name": name,
@@ -1955,7 +2043,9 @@ def convert_pokemon_to_html(
         "form_move_tables": form_move_tables,
         "type_icons": type_icons,
         "moves": moves,
-        "image_path": image_path
+        "image_path": image_path,
+        "page_bg_start": page_bg_start,
+        "page_bg_end": page_bg_end,
     }
 
     # 7. 生成网页
