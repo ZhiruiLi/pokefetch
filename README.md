@@ -29,28 +29,30 @@ uv sync
 
 ## 构建 EXE（Windows）
 
-项目已提供打包脚本：`build_exe.bat`
+项目使用统一发布脚本：`release_exe.bat`
 
 ```bat
-build_exe.bat
+release_exe.bat [spec_file] [exe_name]
 ```
 
-打包完成后可执行文件位于：
+参数说明：
+- `spec_file`（可选）：用于控制打包行为的 `.spec` 文件，默认 `pokefetch.spec`
+- `exe_name`（可选）：期望生成的 EXE 名称（不含 `.exe`），默认 `pokefetch`
 
-- `dist/pokefetch.exe`
+该脚本会自动：
+- 清理旧产物（`build/`、`dist/`）
+- 保留并使用传入的 `.spec` 文件（不再删除）
+- 检查/安装 PyInstaller（若缺失）
+- 根据 `.spec` 构建 EXE
+- 同步可编辑配置到 `dist/config/`
+- 生成发布压缩包
 
-`dist/` 中还会同步可编辑配置文件：
+`dist/` 中可编辑配置文件位置：
 
 - `dist/config/name_mapping.txt`
 - `dist/config/ignore_skills.txt`
 
-如需先清理旧产物再打包，可使用：
-
-```bat
-release_exe.bat
-```
-
-`release_exe.bat` 会额外生成发布压缩包：
+默认会生成发布压缩包：
 
 - `dist/pokefetch.zip`
 
@@ -60,7 +62,14 @@ release_exe.bat
 - `config/name_mapping.txt`
 - `config/ignore_skills.txt`
 
-使用示例：
+打包示例：
+
+```bat
+release_exe.bat
+release_exe.bat pokefetch.spec pokefetch
+```
+
+运行 EXE 示例：
 
 ```bat
 pokefetch.exe 0003
