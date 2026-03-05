@@ -5,18 +5,24 @@ Pokemon PPT Helper Tool
 """
 
 import argparse
+import colorsys
 import hashlib
+import json
+import mimetypes
 import os
 import re
 import shutil
 import sys
+import threading
 import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import quote, urljoin
+from urllib.parse import parse_qs, quote, unquote, urljoin
 
 import requests
 from bs4 import BeautifulSoup
 from jinja2 import Template
+from pypinyin import Style, lazy_pinyin
 
 def get_app_dir() -> Path:
     """返回应用目录（源码模式为脚本目录，EXE 模式为 exe 所在目录）"""
@@ -33,6 +39,14 @@ def get_bundle_dir() -> Path:
     return Path(__file__).resolve().parent
 
 
+def resolve_existing_path(candidates: list[Path]) -> Path:
+    """返回首个存在的路径；若均不存在则返回第一个候选路径。"""
+    for path in candidates:
+        if path.exists():
+            return path
+    return candidates[0]
+
+
 # 常量定义
 BASE_URL = "https://wiki.52poke.com"
 LIST_URL = f"{BASE_URL}/wiki/宝可梦列表（按全国图鉴编号）"
@@ -44,11 +58,38 @@ BUNDLE_DIR = get_bundle_dir()
 CACHE_DIR = Path(".cache/pages")
 CACHE_ENABLED = True
 REFRESH_CACHE = False
-NAME_MAPPING_FILE = APP_DIR / "name_mapping.txt"
-IGNORE_SKILLS_FILE = APP_DIR / "ignore_skills.txt"
-TEMPLATE_FILE = BUNDLE_DIR / "template.html"
-SITE_STYLES_FILE = BUNDLE_DIR / "wiki_site_styles.css"
-ICONS_DIR = BUNDLE_DIR / "icons"
+
+ASSETS_DIR = resolve_existing_path([
+    BUNDLE_DIR / "assets",
+    BUNDLE_DIR,
+])
+CONFIG_DIR = resolve_existing_path([
+    APP_DIR / "config",
+    APP_DIR,
+])
+
+NAME_MAPPING_FILE = resolve_existing_path([
+    APP_DIR / "config" / "name_mapping.txt",
+    APP_DIR / "name_mapping.txt",
+])
+IGNORE_SKILLS_FILE = resolve_existing_path([
+    APP_DIR / "config" / "ignore_skills.txt",
+    APP_DIR / "ignore_skills.txt",
+])
+TEMPLATE_FILE = resolve_existing_path([
+    BUNDLE_DIR / "assets" / "template.html",
+    BUNDLE_DIR / "template.html",
+])
+SITE_STYLES_FILE = resolve_existing_path([
+    BUNDLE_DIR / "assets" / "wiki_site_styles.css",
+    BUNDLE_DIR / "wiki_site_styles.css",
+])
+ICONS_DIR = resolve_existing_path([
+    BUNDLE_DIR / "assets" / "icons",
+    BUNDLE_DIR / "icons",
+])
+POKEMON_INDEX_CACHE: list[dict] | None = None
+TYPE_BG_COLOR_CACHE: dict[str, str] | None = None
 
 TYPE_ICON_ALIASES = {
     "斗": "格斗",
@@ -218,9 +259,12 @@ def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
     # 判断输入是编号还是名字
     is_number = identifier.isdigit()
     search_num = identifier.zfill(4) if is_number else None
+    identifier_norm = normalize_name_for_match(identifier)
 
     # 查找所有表格 (使用 roundy 或 eplist 类)
     tables = soup.find_all("table", class_=["roundy", "eplist", "sortable"])
+
+    fallback_match: tuple[str, str, str] | None = None
 
     for table in tables:
         rows = table.find_all("tr")
@@ -237,38 +281,349 @@ def find_pokemon_link(identifier: str) -> tuple[str, str, str]:
                 continue
             num = num_match.group(1)
 
-            # 提取名字 (第四列，包含中文名)
+            # 提取名字（保留形态后缀）
             name_cell = cells[3] if len(cells) > 3 else cells[2]
-            name_link = name_cell.find("a")
-            if not name_link:
-                # 尝试直接从单元格文本获取
-                name = name_cell.get_text(strip=True)
-                href = ""
-            else:
-                name = name_link.get_text(strip=True)
-                href = name_link.get("href", "")
-
+            name, base_name, href = extract_name_and_link_from_list_cell(name_cell)
             if not name:
                 continue
+
+            if href:
+                detail_url = urljoin(BASE_URL, href)
+            else:
+                detail_url = f"{BASE_URL}/wiki/{base_name or name}"
 
             # 匹配
             if is_number and num == search_num:
                 print(f"找到 Pokemon: #{num} {name}")
-                # 构建详情页URL
-                if href:
-                    detail_url = urljoin(BASE_URL, href)
-                else:
-                    detail_url = f"{BASE_URL}/wiki/{name}"
-                return num, name, detail_url
-            elif not is_number and identifier in name:
-                print(f"找到 Pokemon: #{num} {name}")
-                if href:
-                    detail_url = urljoin(BASE_URL, href)
-                else:
-                    detail_url = f"{BASE_URL}/wiki/{name}"
                 return num, name, detail_url
 
+            if not is_number:
+                name_norm = normalize_name_for_match(name)
+                base_name_norm = normalize_name_for_match(base_name)
+
+                # 优先精确匹配（支持括号/空白差异）
+                if identifier_norm and (identifier_norm == name_norm or identifier_norm == base_name_norm):
+                    print(f"找到 Pokemon: #{num} {name}")
+                    return num, name, detail_url
+
+                # 退化为模糊匹配
+                if identifier_norm and (
+                    identifier_norm in name_norm
+                    or identifier_norm in base_name_norm
+                ) and fallback_match is None:
+                    fallback_match = (num, name, detail_url)
+
+    if fallback_match is not None:
+        print(f"找到 Pokemon: #{fallback_match[0]} {fallback_match[1]}")
+        return fallback_match
+
     raise ValueError(f"未找到 Pokemon: {identifier}")
+
+
+def build_pinyin_aliases(text: str) -> tuple[str, str]:
+    """构建中文名称对应的拼音全拼与首字母简拼"""
+    full = "".join(lazy_pinyin(text, errors="ignore")).lower()
+    initials = "".join(lazy_pinyin(text, style=Style.FIRST_LETTER, errors="ignore")).lower()
+    return full, initials
+
+
+def load_type_bg_color_map() -> dict[str, str]:
+    """从 wiki 样式文件中提取属性背景色映射（.bg-属性 -> --bg）"""
+    global TYPE_BG_COLOR_CACHE
+    if TYPE_BG_COLOR_CACHE is not None:
+        return TYPE_BG_COLOR_CACHE
+
+    color_map: dict[str, str] = {}
+    if SITE_STYLES_FILE.exists():
+        css_text = SITE_STYLES_FILE.read_text(encoding="utf-8", errors="ignore")
+        for name, color in re.findall(r":where\(\.bg-([^,\.\)]+)[^\)]*\)\{--bg:([^;\}]+);", css_text):
+            key = name.strip()
+            value = color.strip()
+            if key and value and key not in color_map:
+                color_map[key] = value
+
+    TYPE_BG_COLOR_CACHE = color_map
+    return color_map
+
+
+def get_type_bg_color(type_name: str) -> str:
+    """获取属性背景色（优先读取源站样式映射）"""
+    color_map = load_type_bg_color_map()
+    return color_map.get(type_name, "#94a3b8")
+
+
+def parse_css_color_to_hex(color_text: str) -> str:
+    """将 CSS 颜色文本解析为 #rrggbb（支持 #hex / rgb / var(..., #hex)）"""
+    text = (color_text or "").strip()
+    if not text:
+        return ""
+
+    hex_matches = re.findall(r"#([0-9a-fA-F]{6}|[0-9a-fA-F]{3})\b", text)
+    if hex_matches:
+        raw = hex_matches[-1]
+        if len(raw) == 3:
+            raw = "".join(ch * 2 for ch in raw)
+        return f"#{raw.lower()}"
+
+    rgb_match = re.search(
+        r"rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})(?:\s*,\s*[\d\.]+)?\s*\)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if rgb_match:
+        r = max(0, min(255, int(rgb_match.group(1))))
+        g = max(0, min(255, int(rgb_match.group(2))))
+        b = max(0, min(255, int(rgb_match.group(3))))
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    return ""
+
+
+def adjust_hex_color(hex_color: str, saturation_ratio: float = 0.55, lightness_ratio: float = 0.82) -> str:
+    """降低饱和度并调整明度，返回 #rrggbb。ratio < 1 表示降低。"""
+    normalized = parse_css_color_to_hex(hex_color)
+    if not normalized:
+        return ""
+
+    r = int(normalized[1:3], 16) / 255.0
+    g = int(normalized[3:5], 16) / 255.0
+    b = int(normalized[5:7], 16) / 255.0
+
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    s = max(0.0, min(1.0, s * saturation_ratio))
+    l = max(0.10, min(0.92, l * lightness_ratio))
+
+    r2, g2, b2 = colorsys.hls_to_rgb(h, l, s)
+    return f"#{int(round(r2 * 255)):02x}{int(round(g2 * 255)):02x}{int(round(b2 * 255)):02x}"
+
+
+def build_page_background_colors(stats_tables: list[dict], types: list[str], pokemon_name: str) -> tuple[str, str]:
+    """基于普通形态种族值表主题色，生成详情页背景渐变色。"""
+    default_start = "#667eea"
+    default_end = "#764ba2"
+
+    base_color = ""
+    target_stats = None
+
+    for form in stats_tables or []:
+        form_name = form.get("form_name", "默认")
+        if normalize_form_name_for_match(form_name, pokemon_name) == "default":
+            target_stats = form
+            break
+
+    if target_stats is None and stats_tables:
+        target_stats = stats_tables[0]
+
+    if target_stats:
+        base_color = parse_css_color_to_hex(target_stats.get("table_bg_color", ""))
+        if not base_color:
+            theme_class = target_stats.get("table_theme_class", "")
+            m = re.match(r"^(?:bg|bgl|bgd)-(.+)$", theme_class)
+            if m:
+                type_name = normalize_type_name_for_theme(m.group(1))
+                if type_name:
+                    base_color = parse_css_color_to_hex(get_type_bg_color(type_name))
+
+    if not base_color and types:
+        type_name = normalize_type_name_for_theme(types[0])
+        if type_name:
+            base_color = parse_css_color_to_hex(get_type_bg_color(type_name))
+
+    if not base_color:
+        return default_start, default_end
+
+    bg_start = adjust_hex_color(base_color, saturation_ratio=0.55, lightness_ratio=0.82) or default_start
+    bg_end = adjust_hex_color(base_color, saturation_ratio=0.58, lightness_ratio=0.68) or default_end
+    return bg_start, bg_end
+
+
+def normalize_type_text(text: str) -> str:
+    """统一属性文案为简体，便于匹配（如 惡->恶）"""
+    normalized = re.sub(r"\s+", "", text or "")
+    replacements = {
+        "惡": "恶",
+        "龍": "龙",
+        "電": "电",
+        "鋼": "钢",
+        "飛": "飞",
+        "蟲": "虫",
+        "靈": "灵",
+        "鬥": "斗",
+    }
+    for old, new in replacements.items():
+        normalized = normalized.replace(old, new)
+    return normalized
+
+
+def extract_types_from_list_cells(cells: list[BeautifulSoup]) -> list[str]:
+    """从全国图鉴列表行中提取属性"""
+    types: list[str] = []
+    for idx in [6, 7]:
+        if idx >= len(cells):
+            continue
+        cell = cells[idx]
+
+        link_texts = [a.get_text(strip=True) for a in cell.find_all("a")]
+        candidates = link_texts if link_texts else [cell.get_text(" ", strip=True)]
+
+        found = ""
+        for candidate in candidates:
+            normalized = normalize_type_text(candidate)
+            for t in TYPE_ORDER:
+                if t in normalized:
+                    found = t
+                    break
+            if found:
+                break
+
+        if found and found not in types:
+            types.append(found)
+
+    return types
+
+
+def normalize_list_name_text(text: str) -> str:
+    """清理列表名称文本（去空白/脚注）"""
+    cleaned = re.sub(r"\[[^\]]*\]", "", text or "")
+    cleaned = cleaned.replace("\xa0", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def normalize_name_for_match(text: str) -> str:
+    """统一名称匹配键（忽略空白、括号、部分分隔符差异）"""
+    normalized = normalize_list_name_text(text)
+    normalized = normalized.replace("（", "(").replace("）", ")")
+    normalized = re.sub(r"[\s()（）·・_\-/]+", "", normalized)
+    return normalized.lower()
+
+
+def extract_name_and_link_from_list_cell(name_cell: BeautifulSoup) -> tuple[str, str, str]:
+    """提取列表名称列中的展示名、基础名和链接"""
+    raw_name = normalize_list_name_text(name_cell.get_text(" ", strip=True))
+    name_link = name_cell.find("a")
+
+    if not name_link:
+        return raw_name, raw_name, ""
+
+    base_name = normalize_list_name_text(name_link.get_text(" ", strip=True))
+    href = (name_link.get("href", "") or "").strip()
+    display_name = raw_name or base_name
+
+    # 列表中常见表现："索罗亚克 洗翠的样子"，统一显示为"索罗亚克（洗翠的样子）"
+    if base_name and display_name and display_name != base_name and "（" not in display_name and "(" not in display_name:
+        suffix = display_name.removeprefix(base_name).strip(" -·・/、，,")
+        if suffix:
+            display_name = f"{base_name}（{suffix}）"
+
+    if not display_name:
+        display_name = base_name
+
+    return display_name, (base_name or display_name), href
+
+
+def build_pokemon_index() -> list[dict]:
+    """从列表页提取 Pokemon 索引（编号、名称、详情链接）"""
+    soup = fetch_page(LIST_URL)
+    tables = soup.find_all("table", class_=["roundy", "eplist", "sortable"])
+
+    entries: list[dict] = []
+    seen_entries: set[tuple[str, str, str]] = set()
+
+    for table in tables:
+        for row in table.find_all("tr"):
+            cells = row.find_all("td")
+            if len(cells) < 6:
+                continue
+
+            num_cell = cells[0].get_text(strip=True)
+            num_match = re.search(r"#(\d{4})", num_cell)
+            if not num_match:
+                continue
+            number = num_match.group(1)
+
+            name_cell = cells[3] if len(cells) > 3 else cells[2]
+            name, base_name, href = extract_name_and_link_from_list_cell(name_cell)
+            if not name:
+                continue
+
+            # 同编号不同形态需要保留；只去重完全相同条目
+            dedup_key = (number, normalize_name_for_match(name), href)
+            if dedup_key in seen_entries:
+                continue
+            seen_entries.add(dedup_key)
+
+            name_en = cells[5].get_text(" ", strip=True) if len(cells) > 5 else ""
+            types = extract_types_from_list_cells(cells)
+            type_colors = [get_type_bg_color(t) for t in types]
+            name_pinyin, name_initials = build_pinyin_aliases(name)
+            item_key = hashlib.md5(f"{number}|{name}|{href}".encode("utf-8")).hexdigest()[:12]
+
+            detail_url = urljoin(BASE_URL, href) if href else f"{BASE_URL}/wiki/{base_name or name}"
+            entries.append({
+                "number": number,
+                "name": name,
+                "name_en": name_en,
+                "types": types,
+                "type_colors": type_colors,
+                "name_pinyin": name_pinyin,
+                "name_initials": name_initials,
+                "detail_url": detail_url,
+                "identifier": name,
+                "item_key": item_key,
+            })
+
+    entries.sort(key=lambda x: x.get("number", "9999"))
+    return entries
+
+
+def get_pokemon_index() -> list[dict]:
+    """获取 Pokemon 索引（内存缓存）"""
+    global POKEMON_INDEX_CACHE
+    if POKEMON_INDEX_CACHE is None:
+        POKEMON_INDEX_CACHE = build_pokemon_index()
+    return POKEMON_INDEX_CACHE
+
+
+def refresh_pokemon_index(force_refresh_cache: bool = True) -> list[dict]:
+    """强制刷新 Pokemon 索引，可选择同时刷新列表页缓存"""
+    global POKEMON_INDEX_CACHE, REFRESH_CACHE
+    old_refresh_cache = REFRESH_CACHE
+    try:
+        if force_refresh_cache:
+            REFRESH_CACHE = True
+        POKEMON_INDEX_CACHE = build_pokemon_index()
+        return POKEMON_INDEX_CACHE
+    finally:
+        REFRESH_CACHE = old_refresh_cache
+
+
+def search_pokemon_entries(query: str) -> list[dict]:
+    """按编号/中文名/英文名/拼音搜索 Pokemon 条目"""
+    entries = get_pokemon_index()
+    q = normalize_name_for_match(query)
+    if not q:
+        return entries
+
+    results: list[dict] = []
+    for item in entries:
+        number = item.get("number", "").lower()
+        name = item.get("name", "")
+        name_norm = normalize_name_for_match(name)
+        name_en = item.get("name_en", "").lower()
+        name_pinyin = item.get("name_pinyin", "")
+        name_initials = item.get("name_initials", "")
+
+        if (
+            q in number
+            or q in name_norm
+            or q in name_en
+            or q in name_pinyin
+            or q in name_initials
+        ):
+            results.append(item)
+
+    return results
 
 
 def extract_base_stats(soup: BeautifulSoup) -> dict:
@@ -1591,10 +1946,675 @@ def open_html_in_default_browser(html_file: Path) -> None:
         print(f"自动打开浏览器失败: {e}")
 
 
+def convert_pokemon_to_html(
+    identifier: str,
+    output_dir: Path,
+    open_web: bool = False,
+) -> Path:
+    """按 identifier 生成单个 Pokemon HTML，返回生成文件路径"""
+    # 1. 在列表页面查找 Pokemon
+    number, name, detail_url = find_pokemon_link(identifier)
+
+    # 2. 创建输出目录
+    output_dir.mkdir(parents=True, exist_ok=True)
+    print(f"输出目录: {output_dir}")
+
+    # 3. 抓取详情页面
+    print(f"正在抓取详情页面: {detail_url}")
+    soup = fetch_page(detail_url)
+
+    # 4. 加载映射并提取信息
+    print("正在提取信息...")
+    name_mapping = load_name_mapping()
+    stats_tables = extract_stats_tables(soup)
+    if stats_tables:
+        first_rows = {r["key"]: r["base"] for r in stats_tables[0]["rows"]}
+        stats = {
+            "hp": first_rows.get("hp", "?"),
+            "attack": first_rows.get("attack", "?"),
+            "defense": first_rows.get("defense", "?"),
+            "sp_attack": first_rows.get("sp_attack", "?"),
+            "sp_defense": first_rows.get("sp_defense", "?"),
+            "speed": first_rows.get("speed", "?")
+        }
+    else:
+        stats = extract_base_stats(soup)
+        stats_tables = [{
+            "form_name": "默认",
+            "rows": [
+                {"key": "hp", "label": "HP", "base": stats.get("hp", "?"), "base_int": int(stats.get("hp", 0)) if str(stats.get("hp", "")).isdigit() else 0, "row_class": "bgl-HP", "bar_bg_class": "bg-HP", "bar_bd_class": "bd-HP", "lv50": "—", "lv100": "—"},
+                {"key": "attack", "label": "攻击", "base": stats.get("attack", "?"), "base_int": int(stats.get("attack", 0)) if str(stats.get("attack", "")).isdigit() else 0, "row_class": "bgl-攻击", "bar_bg_class": "bg-攻击", "bar_bd_class": "bd-攻击", "lv50": "—", "lv100": "—"},
+                {"key": "defense", "label": "防御", "base": stats.get("defense", "?"), "base_int": int(stats.get("defense", 0)) if str(stats.get("defense", "")).isdigit() else 0, "row_class": "bgl-防御", "bar_bg_class": "bg-防御", "bar_bd_class": "bd-防御", "lv50": "—", "lv100": "—"},
+                {"key": "sp_attack", "label": "特攻", "base": stats.get("sp_attack", "?"), "base_int": int(stats.get("sp_attack", 0)) if str(stats.get("sp_attack", "")).isdigit() else 0, "row_class": "bgl-特攻", "bar_bg_class": "bg-特攻", "bar_bd_class": "bd-特攻", "lv50": "—", "lv100": "—"},
+                {"key": "sp_defense", "label": "特防", "base": stats.get("sp_defense", "?"), "base_int": int(stats.get("sp_defense", 0)) if str(stats.get("sp_defense", "")).isdigit() else 0, "row_class": "bgl-特防", "bar_bg_class": "bg-特防", "bar_bd_class": "bd-特防", "lv50": "—", "lv100": "—"},
+                {"key": "speed", "label": "速度", "base": stats.get("speed", "?"), "base_int": int(stats.get("speed", 0)) if str(stats.get("speed", "")).isdigit() else 0, "row_class": "bgl-速度", "bar_bg_class": "bg-速度", "bar_bd_class": "bd-速度", "lv50": "—", "lv100": "—"}
+            ],
+            "total": "?"
+        }]
+
+    effectiveness_data = extract_type_effectiveness(soup, name_mapping)
+    type_effectiveness_forms = effectiveness_data.get("forms", [])
+
+    if type_effectiveness_forms:
+        types = type_effectiveness_forms[0].get("types", [])
+        effectiveness = type_effectiveness_forms[0].get("effectiveness", {})
+    else:
+        types = extract_types(soup, name_mapping)
+        effectiveness = effectiveness_data
+        type_effectiveness_forms = [{
+            "form_name": "默认",
+            "types": types,
+            "effectiveness": effectiveness,
+            "attack_strong": [],
+            "attack_weak": []
+        }]
+
+    form_ability_tables = extract_form_ability_tables(soup, name)
+
+    moves = dedupe_moves_by_name(extract_moves(soup))
+    ignored_skills = load_ignored_skills()
+    form_move_tables = build_form_move_tables(
+        moves,
+        type_effectiveness_forms,
+        name_mapping=name_mapping,
+        fallback_types=types,
+        ignored_skills=ignored_skills,
+    )
+
+    # 5. 下载按形态区分的图片
+    form_images = extract_form_images(soup, name)
+    if not form_images:
+        fallback_image_url = extract_image_url(soup, number)
+        if fallback_image_url:
+            form_images = [{
+                "form_name": name,
+                "form_key": "default",
+                "image_url": fallback_image_url,
+                "image_path": "",
+            }]
+
+    for form_img in form_images:
+        image_url = form_img.get("image_url", "")
+        if not image_url:
+            continue
+
+        image_filename = make_form_image_filename(number, name, form_img.get("form_key", "default"))
+        image_save_path = output_dir / image_filename
+        if download_image(image_url, image_save_path):
+            form_img["image_path"] = image_filename
+
+    assign_form_images_to_effectiveness_forms(type_effectiveness_forms, form_images, name)
+    assign_form_images_to_ability_tables(form_ability_tables, form_images, name)
+    assign_stats_theme_classes(stats_tables, type_effectiveness_forms, name)
+
+    image_path = next(
+        (
+            f.get("image_path", "")
+            for f in type_effectiveness_forms
+            if normalize_form_name_for_match(f.get("form_name", "默认"), name) == "default" and f.get("image_path")
+        ),
+        "",
+    )
+    if not image_path:
+        image_path = next((f.get("image_path", "") for f in type_effectiveness_forms if f.get("image_path")), "")
+
+    # 6. 整理数据
+    type_icons = build_type_icon_map()
+    page_bg_start, page_bg_end = build_page_background_colors(stats_tables, types, name)
+
+    data = {
+        "number": number,
+        "name": name,
+        "detail_url": detail_url,
+        "types": types,
+        "stats": stats,
+        "stats_tables": stats_tables,
+        "effectiveness": effectiveness,
+        "type_effectiveness_forms": type_effectiveness_forms,
+        "form_images": form_images,
+        "form_ability_tables": form_ability_tables,
+        "form_move_tables": form_move_tables,
+        "type_icons": type_icons,
+        "moves": moves,
+        "image_path": image_path,
+        "page_bg_start": page_bg_start,
+        "page_bg_end": page_bg_end,
+    }
+
+    # 7. 生成网页
+    html_filename = f"{number}{name}.html"
+    html_file = generate_html(data, output_dir, html_filename)
+    if open_web:
+        open_html_in_default_browser(html_file)
+
+    print(f"\n完成! 输出目录: {output_dir.absolute()}")
+    print(f"网页文件: {html_file.absolute()}")
+    return html_file
+
+
+def render_mvp_index_page(initial_identifier: str | None = None) -> str:
+    """渲染本地服务版 MVP 首页"""
+    initial = json.dumps(initial_identifier or "", ensure_ascii=False)
+    return f"""<!doctype html>
+<html lang=\"zh-CN\">
+<head>
+  <meta charset=\"utf-8\" />
+  <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\" />
+  <title>Pokefetch 本地服务版</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; background: #f5f7fb; }}
+    .app {{ display: flex; height: 100vh; }}
+    .left {{ width: 340px; border-right: 1px solid #dfe3eb; background: #fff; display: flex; flex-direction: column; }}
+    .search {{ padding: 12px; border-bottom: 1px solid #eef1f6; }}
+    .search-input-wrap {{ position: relative; }}
+    .search input {{ width: 100%; padding: 10px 36px 10px 12px; border: 1px solid #cfd6e4; border-radius: 8px; }}
+    .search-clear-btn {{
+      position: absolute;
+      right: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 20px;
+      height: 20px;
+      border: 0;
+      border-radius: 50%;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      background: #d1d5db;
+      color: #fff;
+      font-size: 12px;
+      line-height: 1;
+      padding: 0;
+    }}
+    .search-clear-btn.show {{ display: inline-flex; }}
+    .search-clear-btn:hover {{ background: #9ca3af; }}
+    .list {{ overflow: auto; flex: 1; }}
+    .item {{ width: 100%; border: 0; background: #fff; text-align: left; padding: 10px 12px; cursor: pointer; border-bottom: 1px solid #f0f2f7; }}
+    .item:hover {{ background: #f7faff; }}
+    .item.active {{ background: #eaf2ff; }}
+    .item-main {{ display: flex; align-items: baseline; gap: 8px; }}
+    .item-sub {{ margin-top: 5px; font-size: 12px; color: #64748b; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }}
+    .id {{ color: #6b7280; margin-right: 2px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+    .name {{ color: #111827; font-weight: 600; }}
+    .name-en {{ color: #64748b; }}
+    .type-chip {{ border: 1px solid transparent; border-radius: 10px; padding: 1px 6px; color: #fff; font-weight: 600; }}
+    .right {{ flex: 1; display: flex; flex-direction: column; position: relative; }}
+    .toolbar {{ height: 46px; display: flex; align-items: center; justify-content: space-between; padding: 0 12px; border-bottom: 1px solid #dfe3eb; background: #fff; color: #4b5563; gap: 12px; }}
+    #status {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex: 1; }}
+    .toolbar-actions {{ display: flex; align-items: center; gap: 8px; }}
+    .btn {{ border: 1px solid #cfd6e4; background: #fff; color: #1f2937; border-radius: 6px; padding: 6px 10px; cursor: pointer; }}
+    .btn:hover {{ background: #f3f6fb; }}
+    .btn:disabled {{ opacity: 0.6; cursor: not-allowed; }}
+    iframe {{ border: 0; width: 100%; height: calc(100vh - 46px); background: #fff; }}
+    .empty-state {{
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 46px;
+      bottom: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+      color: #334155;
+      z-index: 2;
+      padding: 20px;
+      text-align: center;
+    }}
+    .empty-state.show {{ display: flex; }}
+    .empty-card {{
+      max-width: 420px;
+      border: 1px solid #dbe2f0;
+      border-radius: 12px;
+      padding: 18px 20px;
+      background: #ffffff;
+      box-shadow: 0 8px 24px rgba(15, 23, 42, 0.06);
+    }}
+    .empty-title {{ font-size: 16px; font-weight: 600; color: #0f172a; margin-bottom: 6px; }}
+    .empty-desc {{ font-size: 13px; color: #64748b; line-height: 1.6; }}
+    .loading-mask {{
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 46px;
+      bottom: 0;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(255, 255, 255, 0.72);
+      z-index: 10;
+    }}
+    .loading-mask.show {{ display: flex; }}
+    .loading-card {{
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      border: 1px solid #dbe2f0;
+      border-radius: 8px;
+      background: #ffffff;
+      color: #334155;
+      box-shadow: 0 4px 16px rgba(15, 23, 42, 0.08);
+    }}
+    .spinner {{
+      width: 18px;
+      height: 18px;
+      border: 2px solid #c7d2fe;
+      border-top-color: #4f46e5;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }}
+    @keyframes spin {{
+      from {{ transform: rotate(0deg); }}
+      to {{ transform: rotate(360deg); }}
+    }}
+  </style>
+</head>
+<body>
+  <div class=\"app\">
+    <aside class=\"left\">
+      <div class=\"search\">
+        <div class=\"toolbar-actions\" style=\"margin-bottom: 8px;\">
+          <button id=\"refreshListBtn\" class=\"btn\" type=\"button\">刷新列表（重新拉取）</button>
+          <button id=\"luckyBtn\" class=\"btn\" type=\"button\">手气不错</button>
+        </div>
+        <div class=\"search-input-wrap\">
+          <input id=\"searchInput\" placeholder=\"搜索编号/名字/形态(中英文拼音)\" />
+          <button id=\"clearSearchBtn\" class=\"search-clear-btn\" type=\"button\" aria-label=\"清空搜索\">×</button>
+        </div>
+      </div>
+      <div id=\"list\" class=\"list\"></div>
+    </aside>
+    <section class=\"right\">
+      <div class=\"toolbar\">
+        <span id=\"status\">就绪</span>
+        <div class=\"toolbar-actions\">
+          <button id=\"refreshBtn\" class=\"btn\" type=\"button\">刷新当前（忽略缓存）</button>
+        </div>
+      </div>
+      <iframe id=\"detailFrame\" title=\"pokemon-detail\"></iframe>
+      <div id=\"emptyState\" class=\"empty-state show\">
+        <div class=\"empty-card\">
+          <div class=\"empty-title\">欢迎使用 Pokefetch</div>
+          <div class=\"empty-desc\">请从左侧选择一个宝可梦以加载详情。<br/>也可以点击“手气不错”随机开始。</div>
+        </div>
+      </div>
+      <div id=\"loadingMask\" class=\"loading-mask\">
+        <div class=\"loading-card\">
+          <div class=\"spinner\"></div>
+          <span id=\"loadingText\">正在加载，请稍候...</span>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const initialIdentifier = {initial};
+    const listEl = document.getElementById('list');
+    const searchInput = document.getElementById('searchInput');
+    const detailFrame = document.getElementById('detailFrame');
+    const statusEl = document.getElementById('status');
+    const refreshBtn = document.getElementById('refreshBtn');
+    const refreshListBtn = document.getElementById('refreshListBtn');
+    const luckyBtn = document.getElementById('luckyBtn');
+    const clearSearchBtn = document.getElementById('clearSearchBtn');
+    const loadingMask = document.getElementById('loadingMask');
+    const loadingText = document.getElementById('loadingText');
+    const emptyState = document.getElementById('emptyState');
+    let currentIdentifier = '';
+    let currentSelectionKey = '';
+    let currentName = '';
+    let currentItems = [];
+
+    function setStatus(text) {{
+      statusEl.textContent = text;
+    }}
+
+    function updateSearchClearButton() {{
+      const hasText = searchInput.value.trim().length > 0;
+      clearSearchBtn.classList.toggle('show', hasText);
+    }}
+
+    function setActive(itemKey, scrollIntoView = false) {{
+      currentSelectionKey = itemKey || '';
+      let target = null;
+      for (const btn of listEl.querySelectorAll('.item')) {{
+        const isActive = (btn.dataset.key || '') === (itemKey || '');
+        btn.classList.toggle('active', isActive);
+        if (isActive) target = btn;
+      }}
+      if (scrollIntoView && target) {{
+        target.scrollIntoView({{ block: 'center', behavior: 'smooth' }});
+      }}
+    }}
+
+    function setLoading(loading, text = '正在加载，请稍候...') {{
+      loadingMask.classList.toggle('show', loading);
+      loadingText.textContent = text;
+      refreshBtn.disabled = loading;
+      refreshListBtn.disabled = loading;
+      luckyBtn.disabled = loading;
+      clearSearchBtn.disabled = loading;
+      listEl.style.pointerEvents = loading ? 'none' : 'auto';
+      searchInput.style.pointerEvents = loading ? 'none' : 'auto';
+    }}
+
+    function showEmptyState(visible) {{
+      emptyState.classList.toggle('show', !!visible);
+    }}
+
+    async function fetchList(query = '', forceRefresh = false) {{
+      const url = '/api/pokemon?q=' + encodeURIComponent(query) + (forceRefresh ? '&refresh=1' : '');
+      const res = await fetch(url);
+      if (!res.ok) throw new Error('加载列表失败');
+      const data = await res.json();
+      return data.items || [];
+    }}
+
+    async function renderPokemon(identifier, displayName = '', forceRefresh = false, itemKey = '') {{
+      if (!identifier) return;
+      const hadContent = !!detailFrame.getAttribute('src');
+      currentIdentifier = identifier;
+      if (itemKey) setActive(itemKey);
+      currentName = displayName || currentName || identifier;
+      const actionText = forceRefresh ? '正在刷新' : '正在加载';
+      setStatus(actionText + ' ' + (displayName || identifier) + ' 页面...');
+      showEmptyState(false);
+      setLoading(true, actionText + ' ' + (displayName || identifier) + ' ...');
+      try {{
+        const res = await fetch('/api/render', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ identifier, refresh_cache: forceRefresh }})
+        }});
+        const data = await res.json();
+        if (!res.ok || !data.ok) {{
+          throw new Error(data.error || '生成失败');
+        }}
+        detailFrame.src = data.html_url + '?t=' + Date.now();
+        setStatus('已加载：' + (displayName || currentName || identifier));
+      }} catch (err) {{
+        if (!hadContent) showEmptyState(true);
+        throw err;
+      }} finally {{
+        setLoading(false);
+      }}
+    }}
+
+    function renderList(items) {{
+      currentItems = items || [];
+      listEl.innerHTML = '';
+      for (const item of currentItems) {{
+        const btn = document.createElement('button');
+        btn.className = 'item';
+        btn.dataset.number = item.number;
+        btn.dataset.key = item.item_key || `${{item.number}}-${{item.name}}`;
+        const typeHtml = (item.types || []).map((t, i) => {{
+          const c = (item.type_colors || [])[i] || '#94a3b8';
+          return `<span class=\"type-chip\" style=\"background:${{c}};border-color:${{c}};\">${{t}}</span>`;
+        }}).join('');
+        btn.innerHTML = `<div class=\"item-main\"><span class=\"id\">#${{item.number}}</span><span class=\"name\">${{item.name}}</span></div><div class=\"item-sub\"><span class=\"name-en\">${{item.name_en || ''}}</span>${{typeHtml}}</div>`;
+        btn.onclick = async () => {{
+          const identifier = item.number;
+          setActive(btn.dataset.key || '');
+          try {{
+            await renderPokemon(identifier, item.name, false, btn.dataset.key || '');
+          }} catch (err) {{
+            setStatus('错误：' + err.message);
+          }}
+        }};
+        listEl.appendChild(btn);
+      }}
+    }}
+
+    refreshBtn.addEventListener('click', async () => {{
+      if (!currentIdentifier) {{
+        setStatus('请先从左侧选择一个宝可梦');
+        return;
+      }}
+      try {{
+        await renderPokemon(currentIdentifier, currentName || currentIdentifier, true, currentSelectionKey);
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }});
+
+    refreshListBtn.addEventListener('click', async () => {{
+      try {{
+        setStatus('正在刷新左侧列表...');
+        const items = await fetchList(searchInput.value.trim(), true);
+        renderList(items);
+        setStatus('列表已刷新');
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }});
+
+    luckyBtn.addEventListener('click', async () => {{
+      try {{
+        let items = currentItems;
+        if (!items || items.length === 0) {{
+          items = await fetchList(searchInput.value.trim());
+          renderList(items);
+        }}
+        if (!items || items.length === 0) {{
+          setStatus('当前列表为空，无法随机选择');
+          return;
+        }}
+        const picked = items[Math.floor(Math.random() * items.length)];
+        const pickedKey = picked.item_key || `${{picked.number}}-${{picked.name}}`;
+        const pickedIdentifier = picked.number;
+        setActive(pickedKey, true);
+        await renderPokemon(pickedIdentifier, picked.name, false, pickedKey);
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }});
+
+    let timer = null;
+    searchInput.addEventListener('input', () => {{
+      updateSearchClearButton();
+      clearTimeout(timer);
+      timer = setTimeout(async () => {{
+        try {{
+          const items = await fetchList(searchInput.value.trim());
+          renderList(items);
+        }} catch (err) {{
+          setStatus('错误：' + err.message);
+        }}
+      }}, 200);
+    }});
+
+    clearSearchBtn.addEventListener('click', async () => {{
+      searchInput.value = '';
+      updateSearchClearButton();
+      searchInput.focus();
+      try {{
+        const items = await fetchList('');
+        renderList(items);
+        setStatus('已清空搜索');
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }});
+
+    (async () => {{
+      try {{
+        const items = await fetchList('');
+        renderList(items);
+        updateSearchClearButton();
+        if (initialIdentifier) {{
+          await renderPokemon(initialIdentifier, initialIdentifier);
+        }} else {{
+          showEmptyState(true);
+          setStatus('请选择左侧宝可梦以开始');
+        }}
+      }} catch (err) {{
+        setStatus('错误：' + err.message);
+      }}
+    }})();
+  </script>
+</body>
+</html>
+"""
+
+
+def start_local_mvp_service(output_dir: Path, initial_identifier: str | None = None, host: str = "127.0.0.1", port: int = 8765) -> None:
+    """启动本地服务版 MVP：左侧列表 + 右侧详情页"""
+    output_dir = output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    class PokemonMVPHandler(BaseHTTPRequestHandler):
+        def _send_json(self, payload: dict, status_code: int = 200) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_text(self, text: str, status_code: int = 200) -> None:
+            body = text.encode("utf-8")
+            self.send_response(status_code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _serve_out_file(self, sub_path: str) -> None:
+            relative = unquote(sub_path).lstrip("/")
+            target = (output_dir / relative).resolve()
+            if not target.is_file() or not target.is_relative_to(output_dir):
+                self.send_error(404, "File not found")
+                return
+
+            mime, _ = mimetypes.guess_type(str(target))
+            content_type = mime or "application/octet-stream"
+            data = target.read_bytes()
+
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def log_message(self, format: str, *args):
+            return
+
+        def do_GET(self):
+            path_only = self.path.split("?", 1)[0]
+
+            if path_only == "/":
+                self._send_text(render_mvp_index_page(initial_identifier))
+                return
+
+            if path_only == "/api/pokemon":
+                parsed_query = parse_qs(self.path.split("?", 1)[1] if "?" in self.path else "")
+                query = parsed_query.get("q", [""])[0]
+                refresh_flag = (parsed_query.get("refresh", ["0"])[0] or "0").lower()
+                if refresh_flag in ["1", "true", "yes", "y"]:
+                    refresh_pokemon_index(force_refresh_cache=True)
+                entries = search_pokemon_entries(query)
+                self._send_json({"items": entries})
+                return
+
+            if path_only.startswith("/out/"):
+                self._serve_out_file(path_only[len("/out/"):])
+                return
+
+            self.send_error(404, "Not found")
+
+        def do_POST(self):
+            if self.path != "/api/render":
+                self.send_error(404, "Not found")
+                return
+
+            try:
+                content_length = int(self.headers.get("Content-Length", "0"))
+            except ValueError:
+                content_length = 0
+
+            body_raw = self.rfile.read(content_length) if content_length > 0 else b"{}"
+            try:
+                payload = json.loads(body_raw.decode("utf-8"))
+            except Exception:
+                self._send_json({"ok": False, "error": "请求体必须是 JSON"}, 400)
+                return
+
+            identifier = str(payload.get("identifier", "")).strip()
+            if not identifier:
+                self._send_json({"ok": False, "error": "identifier 不能为空"}, 400)
+                return
+
+            refresh_cache = bool(payload.get("refresh_cache", False))
+
+            try:
+                global REFRESH_CACHE
+                old_refresh_cache = REFRESH_CACHE
+                if refresh_cache:
+                    REFRESH_CACHE = True
+
+                html_file = convert_pokemon_to_html(identifier, output_dir, open_web=False)
+                number_match = re.match(r"^(\d{4})", html_file.name)
+                number = number_match.group(1) if number_match else ""
+                self._send_json({
+                    "ok": True,
+                    "html_url": f"/out/{quote(html_file.name)}",
+                    "file_name": html_file.name,
+                    "number": number,
+                    "refresh_cache": refresh_cache,
+                })
+            except ValueError as e:
+                self._send_json({"ok": False, "error": str(e)}, 400)
+            except requests.RequestException as e:
+                self._send_json({"ok": False, "error": f"网络错误: {e}"}, 502)
+            except Exception as e:
+                self._send_json({"ok": False, "error": f"服务异常: {e}"}, 500)
+            finally:
+                REFRESH_CACHE = old_refresh_cache
+
+    server = ThreadingHTTPServer((host, port), PokemonMVPHandler)
+    app_url = f"http://{host}:{port}/"
+    print(f"本地服务已启动: {app_url}")
+    print("按 Enter 重新打开页面，按 Ctrl+C 停止服务")
+
+    def open_app_page() -> None:
+        try:
+            webbrowser.open(app_url)
+        except Exception:
+            pass
+
+    def listen_enter_to_reopen() -> None:
+        while True:
+            try:
+                user_input = input()
+            except EOFError:
+                break
+            except Exception:
+                break
+
+            if user_input.strip() == "":
+                print("重新打开页面...")
+                open_app_page()
+
+    open_app_page()
+    threading.Thread(target=listen_enter_to_reopen, daemon=True).start()
+
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\n服务已停止")
+    finally:
+        server.server_close()
+
+
 def main():
     parser = argparse.ArgumentParser(description="Pokemon PPT Helper Tool")
     parser.add_argument(
         "identifier",
+        nargs="?",
         help="Pokemon 编号(如0001)或名字(如妙蛙种子)"
     )
     parser.add_argument(
@@ -1618,6 +2638,12 @@ def main():
         action="store_true",
         help="生成后自动用系统默认浏览器打开网页"
     )
+    parser.add_argument(
+        "-f",
+        "--fetch-only",
+        action="store_true",
+        help="仅执行抓取并生成（旧逻辑），不启动本地服务"
+    )
 
     args = parser.parse_args()
 
@@ -1625,141 +2651,15 @@ def main():
     CACHE_ENABLED = not args.no_cache
     REFRESH_CACHE = args.refresh_cache
 
+    output_dir = Path(args.output_dir)
+
     try:
-        # 1. 在列表页面查找 Pokemon
-        number, name, detail_url = find_pokemon_link(args.identifier)
-
-        # 2. 创建输出目录
-        output_dir = Path(args.output_dir)
-        output_dir.mkdir(parents=True, exist_ok=True)
-        print(f"输出目录: {output_dir}")
-
-        # 3. 抓取详情页面
-        print(f"正在抓取详情页面: {detail_url}")
-        soup = fetch_page(detail_url)
-
-        # 4. 加载映射并提取信息
-        print("正在提取信息...")
-        name_mapping = load_name_mapping()
-        stats_tables = extract_stats_tables(soup)
-        if stats_tables:
-            first_rows = {r["key"]: r["base"] for r in stats_tables[0]["rows"]}
-            stats = {
-                "hp": first_rows.get("hp", "?"),
-                "attack": first_rows.get("attack", "?"),
-                "defense": first_rows.get("defense", "?"),
-                "sp_attack": first_rows.get("sp_attack", "?"),
-                "sp_defense": first_rows.get("sp_defense", "?"),
-                "speed": first_rows.get("speed", "?")
-            }
+        if args.fetch_only:
+            if not args.identifier:
+                parser.error("--fetch-only/-f 模式下必须提供 identifier")
+            convert_pokemon_to_html(args.identifier, output_dir, open_web=args.open_web)
         else:
-            stats = extract_base_stats(soup)
-            stats_tables = [{
-                "form_name": "默认",
-                "rows": [
-                    {"key": "hp", "label": "HP", "base": stats.get("hp", "?"), "base_int": int(stats.get("hp", 0)) if str(stats.get("hp", "")).isdigit() else 0, "row_class": "bgl-HP", "bar_bg_class": "bg-HP", "bar_bd_class": "bd-HP", "lv50": "—", "lv100": "—"},
-                    {"key": "attack", "label": "攻击", "base": stats.get("attack", "?"), "base_int": int(stats.get("attack", 0)) if str(stats.get("attack", "")).isdigit() else 0, "row_class": "bgl-攻击", "bar_bg_class": "bg-攻击", "bar_bd_class": "bd-攻击", "lv50": "—", "lv100": "—"},
-                    {"key": "defense", "label": "防御", "base": stats.get("defense", "?"), "base_int": int(stats.get("defense", 0)) if str(stats.get("defense", "")).isdigit() else 0, "row_class": "bgl-防御", "bar_bg_class": "bg-防御", "bar_bd_class": "bd-防御", "lv50": "—", "lv100": "—"},
-                    {"key": "sp_attack", "label": "特攻", "base": stats.get("sp_attack", "?"), "base_int": int(stats.get("sp_attack", 0)) if str(stats.get("sp_attack", "")).isdigit() else 0, "row_class": "bgl-特攻", "bar_bg_class": "bg-特攻", "bar_bd_class": "bd-特攻", "lv50": "—", "lv100": "—"},
-                    {"key": "sp_defense", "label": "特防", "base": stats.get("sp_defense", "?"), "base_int": int(stats.get("sp_defense", 0)) if str(stats.get("sp_defense", "")).isdigit() else 0, "row_class": "bgl-特防", "bar_bg_class": "bg-特防", "bar_bd_class": "bd-特防", "lv50": "—", "lv100": "—"},
-                    {"key": "speed", "label": "速度", "base": stats.get("speed", "?"), "base_int": int(stats.get("speed", 0)) if str(stats.get("speed", "")).isdigit() else 0, "row_class": "bgl-速度", "bar_bg_class": "bg-速度", "bar_bd_class": "bd-速度", "lv50": "—", "lv100": "—"}
-                ],
-                "total": "?"
-            }]
-
-        effectiveness_data = extract_type_effectiveness(soup, name_mapping)
-        type_effectiveness_forms = effectiveness_data.get("forms", [])
-
-        if type_effectiveness_forms:
-            types = type_effectiveness_forms[0].get("types", [])
-            effectiveness = type_effectiveness_forms[0].get("effectiveness", {})
-        else:
-            types = extract_types(soup, name_mapping)
-            effectiveness = effectiveness_data
-            type_effectiveness_forms = [{
-                "form_name": "默认",
-                "types": types,
-                "effectiveness": effectiveness,
-                "attack_strong": [],
-                "attack_weak": []
-            }]
-
-        form_ability_tables = extract_form_ability_tables(soup, name)
-
-        moves = dedupe_moves_by_name(extract_moves(soup))
-        ignored_skills = load_ignored_skills()
-        form_move_tables = build_form_move_tables(
-            moves,
-            type_effectiveness_forms,
-            name_mapping=name_mapping,
-            fallback_types=types,
-            ignored_skills=ignored_skills,
-        )
-
-        # 5. 下载按形态区分的图片
-        form_images = extract_form_images(soup, name)
-        if not form_images:
-            fallback_image_url = extract_image_url(soup, number)
-            if fallback_image_url:
-                form_images = [{
-                    "form_name": name,
-                    "form_key": "default",
-                    "image_url": fallback_image_url,
-                    "image_path": "",
-                }]
-
-        for form_img in form_images:
-            image_url = form_img.get("image_url", "")
-            if not image_url:
-                continue
-
-            image_filename = make_form_image_filename(number, name, form_img.get("form_key", "default"))
-            image_save_path = output_dir / image_filename
-            if download_image(image_url, image_save_path):
-                form_img["image_path"] = image_filename
-
-        assign_form_images_to_effectiveness_forms(type_effectiveness_forms, form_images, name)
-        assign_form_images_to_ability_tables(form_ability_tables, form_images, name)
-        assign_stats_theme_classes(stats_tables, type_effectiveness_forms, name)
-
-        image_path = next(
-            (
-                f.get("image_path", "")
-                for f in type_effectiveness_forms
-                if normalize_form_name_for_match(f.get("form_name", "默认"), name) == "default" and f.get("image_path")
-            ),
-            "",
-        )
-        if not image_path:
-            image_path = next((f.get("image_path", "") for f in type_effectiveness_forms if f.get("image_path")), "")
-
-        # 6. 整理数据
-        type_icons = build_type_icon_map()
-        data = {
-            "number": number,
-            "name": name,
-            "detail_url": detail_url,
-            "types": types,
-            "stats": stats,
-            "stats_tables": stats_tables,
-            "effectiveness": effectiveness,
-            "type_effectiveness_forms": type_effectiveness_forms,
-            "form_images": form_images,
-            "form_ability_tables": form_ability_tables,
-            "form_move_tables": form_move_tables,
-            "type_icons": type_icons,
-            "moves": moves,
-            "image_path": image_path
-        }
-
-        # 7. 生成网页
-        html_filename = f"{number}{name}.html"
-        html_file = generate_html(data, output_dir, html_filename)
-        if args.open_web:
-            open_html_in_default_browser(html_file)
-
-        print(f"\n完成! 输出目录: {output_dir.absolute()}")
-        print(f"网页文件: {html_file.absolute()}")
+            start_local_mvp_service(output_dir, initial_identifier=args.identifier)
 
     except ValueError as e:
         print(f"错误: {e}")

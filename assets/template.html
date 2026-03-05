@@ -13,7 +13,7 @@
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            background: linear-gradient(135deg, {{ data.page_bg_start|default('#667eea') }} 0%, {{ data.page_bg_end|default('#764ba2') }} 100%);
             min-height: 100vh;
             padding: 20px;
         }
@@ -158,7 +158,7 @@
             width: auto;
             border-collapse: separate;
             border-spacing: 0;
-            border: 1px solid #7fbe5f;
+            border: 1px solid var(--stats-table-border, #8ccb70);
             border-radius: 0;
             overflow: hidden;
             margin: 8px auto 0;
@@ -167,14 +167,19 @@
         }
         .stats-table th,
         .stats-table td {
-            border-right: 1px solid #8ccb70;
-            border-bottom: 1px solid #8ccb70;
-            padding: 4px 8px;
+            border-right: 1px solid var(--stats-table-border, #8ccb70);
+            border-bottom: 1px solid var(--stats-table-border, #8ccb70);
+            padding: 2px 8px;
             text-align: center;
             color: #111;
             font-weight: 700;
             background: transparent;
-            line-height: 1.2;
+            line-height: 1;
+        }
+        .stats-table,
+        .stats-table th,
+        .stats-table td {
+            border-color: var(--stats-table-border, #8ccb70) !important;
         }
         .stats-table tr > *:last-child {
             border-right: none;
@@ -208,22 +213,26 @@
             text-align: right;
         }
         .stats-table .bar-cell {
-            width: 132px;
+            width: 160px;
+            padding-top: 1px;
+            padding-bottom: 1px;
+            padding-left: 1px;
+            padding-right: 1px;
             background: transparent;
         }
         .stats-table thead th:last-child,
         .stats-table .range-cell {
-            width: 170px;
+            width: 142px;
             white-space: nowrap;
         }
         .stats-table .bar-track {
-            height: 22px;
+            height: 18px;
             background: transparent;
             display: flex;
             align-items: center;
         }
         .stats-table .bar-fill {
-            height: 20px;
+            height: 16px;
         }
         .stats-table .total-row td {
             background: var(--stats-table-bg, #c8ffa3);
@@ -372,7 +381,7 @@
             <h3 class="form-title">{{ '一般' if form.form_name == '默认' else form.form_name }}</h3>
             {% set stats_theme_class = form.table_theme_class if form.table_theme_class else '' %}
             {% set stats_bg_value = form.table_bg_color if form.table_bg_color else 'var(--bgl, #c8ffa3)' %}
-            <table class="stats-table {{ stats_theme_class }}" style="--stats-table-bg: {{ stats_bg_value }}; --stats-table-head-bg: {{ stats_bg_value }};">
+            <table class="stats-table {{ stats_theme_class }}" style="--stats-table-bg: {{ stats_bg_value }}; --stats-table-head-bg: {{ stats_bg_value }}; --stats-table-border: var(--bgd, #8ccb70);">
                 <thead>
                     <tr>
                         <th colspan="2">种族值</th>
